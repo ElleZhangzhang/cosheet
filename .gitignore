@@ -40,3 +40,9 @@ __screenshots__/
 
 .env
 .history/
+
+# Server
+server/node_modules
+server/dist
+server/storage/
+server/.env
