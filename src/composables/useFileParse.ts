@@ -1,0 +1,48 @@
+import type { Dataset } from '@/types/index'
+import { useDataStore } from '@/stores/data'
+
+type WorkerOutMessage =
+  | { ok: true; dataset: Dataset }
+  | { ok: false; message: string }
+
+export function useFileParser() {
+  const dataStore = useDataStore()
+
+  const parseFile = async (file: File): Promise<Dataset> => {
+    return new Promise((resolve, reject) => {
+      const worker = new Worker(
+        new URL('@/workers/excel-parser.worker.ts', import.meta.url),
+        { type: 'module' }
+      )
+
+      const cleanup = () => {
+        worker.onmessage = null
+        worker.onerror = null
+        worker.terminate()
+      }
+      // 2. 接收worker返回的消息
+      worker.onmessage = (event: MessageEvent<WorkerOutMessage>) => {
+        const payload = event.data
+
+        if (!payload.ok) {
+          cleanup()
+          reject(new Error(payload.message || '文件解析失败'))
+          return
+        }
+
+        dataStore.addDataset(payload.dataset) // 没有await，这会导致微任务会为同步任务让步，也就是先将upsertDatasetToDB放入任务队列，然后先执行下面的代码
+        cleanup()
+        resolve(payload.dataset)
+      }
+
+      worker.onerror = () => {
+        cleanup()
+        reject(new Error('Worker 解析失败'))
+      }
+      // 1. 向worker发送file，让worker负责解析file
+      worker.postMessage({ file })
+    })
+  }
+
+  return { parseFile }
+}
