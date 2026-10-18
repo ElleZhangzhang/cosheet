@@ -44,8 +44,15 @@ self.onmessage = (event: MessageEvent<WorkerInMessage>) => {
 
     const workbook = XLSX.read(binaryData, { type: 'binary' })
     const sheetNames = workbook.SheetNames
-    const firstSheetName = sheetNames[0] as string
-    const worksheet: unknown = workbook.Sheets[firstSheetName]
+    const firstSheetName = sheetNames[0]
+    if (!firstSheetName) {
+      throw new Error('文件中没有工作表')
+    }
+
+    const worksheet = workbook.Sheets[firstSheetName]
+    if (!worksheet) {
+      throw new Error('工作表内容为空')
+    }
 
     const jsonData = XLSX.utils.sheet_to_json(worksheet)
     //#endregion

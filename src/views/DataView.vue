@@ -155,10 +155,11 @@ const triggerFileInput = () => {
 };
 
 const handleUpload = async (event: Event) => {
-  const file = event.target.files[0]; // 获取文件
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
   if (!file) return;
 
-  const data = await parseFile(file); // 传入 file 对象
+  await parseFile(file);
 };
 
 //#endregion
