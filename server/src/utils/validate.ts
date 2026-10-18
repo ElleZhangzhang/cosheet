@@ -15,6 +15,10 @@ interface LoginInput {
   password: string;
 }
 
+interface CreateWorkspaceInput {
+  name: string;
+}
+
 function asObject(body: unknown): Record<string, unknown> {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
     throw new HttpError(400, "请求体格式不正确");
@@ -63,7 +67,9 @@ function validateName(value: unknown): string {
   return name;
 }
 
-// HACK try-catch throw
+// HACK_RESOLVED try-catch throw
+// 解决：有路由中间件兜底
+
 // 初步校验注册信息（name/email/password）格式合法
 export function validateRegisterInput(body: unknown): RegisterInput {
   const data = asObject(body);
@@ -82,5 +88,29 @@ export function validateLoginInput(body: unknown): LoginInput {
   return {
     email: validateEmail(data.email),
     password: validateLoginPassword(data.password),
+  };
+}
+
+// 校验工作空间名称：去空格后 1–200 字符
+function validateWorkspaceName(value: unknown): string {
+  const name = typeof value === "string" ? value.trim() : "";
+  if (!name) {
+    throw new HttpError(400, "工作空间名称不能为空");
+  }
+  if (name.length > 200) {
+    throw new HttpError(400, "工作空间名称不能超过 200 个字符");
+  }
+
+  return name;
+}
+
+// 初步校验创建工作空间时的请求体（是不是对象？空间名称对不对？）
+export function validateCreateWorkspaceInput(
+  body: unknown
+): CreateWorkspaceInput {
+  const data = asObject(body);
+
+  return {
+    name: validateWorkspaceName(data.name),
   };
 }

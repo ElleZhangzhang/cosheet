@@ -31,6 +31,8 @@ const router = createRouter({
 // KNOW
 // 路由守卫：拦截页面跳转。工作于前端
 // 请求/响应拦截器：拦截网络请求。工作于网络层
+
+// to是router内定义的route对象
 router.beforeEach(async (to) => {
   const auth = useAuthStore();
   await auth.initialize();

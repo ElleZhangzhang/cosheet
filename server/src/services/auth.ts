@@ -5,6 +5,7 @@ import type { RowDataPacket } from "mysql2";
 import { pool } from "../db/pool";
 import { HttpError } from "../utils/httpError";
 import { hashPassword, verifyPassword } from "../utils/password";
+import { insertWorkspaceWithOwner } from "./workspaces";
 
 interface PublicUser {
   id: string;
@@ -63,8 +64,6 @@ export async function registerUser(
 
   const passwordHash = await hashPassword(password);
   const userId = randomUUID();
-  const workspaceId = randomUUID();
-  const memberId = randomUUID();
   const connection = await pool.getConnection();
 
   try {
@@ -74,13 +73,11 @@ export async function registerUser(
       "INSERT INTO users (id, email, password_hash, name) VALUES (?, ?, ?, ?)",
       [userId, email, passwordHash, name]
     );
-    await connection.execute(
-      "INSERT INTO workspaces (id, name, owner_id) VALUES (?, ?, ?)",
-      [workspaceId, `${name} 的工作空间`, userId]
-    );
-    await connection.execute(
-      "INSERT INTO workspace_members (id, workspace_id, user_id, role) VALUES (?, ?, ?, ?)",
-      [memberId, workspaceId, userId, "owner"]
+    // 复用工作空间创建逻辑，仍在当前注册事务中执行
+    await insertWorkspaceWithOwner(
+      connection,
+      userId,
+      `${name} 的工作空间`
     );
 
     await connection.commit();

@@ -1,7 +1,9 @@
 import cors from "cors";
 import express from "express";
+import { authRequired } from "./middleware/auth";
 import { errorHandler, notFoundHandler } from "./middleware/error";
 import { authRouter } from "./routes/auth";
+import { workspacesRouter } from "./routes/workspaces";
 
 export function createApp() {
   const app = express();
@@ -14,6 +16,7 @@ export function createApp() {
   });
 
   app.use("/api/auth", authRouter);
+  app.use("/api/workspaces", authRequired, workspacesRouter);
 
   // 成功的请求在前面就处理完返回了，走不到这两步。
   // 把它们写在最后，就是为了“捡漏”和“兜底”
