@@ -1390,3 +1390,88 @@ pnpm dev             # http://localhost:5173，/api 代理到 3000
 ## 25. 一句话给实现 Claude
 
 > 先读 `REFACTOR_PLAN.md` 和现有代码。删除所有 AI/图表功能；保留 Worker 解析、分片、虚拟滚动、IndexedDB 缓存、TipTap 自定义节点、PDF 导出；用 Express + MySQL（`mysql2` 参数化 SQL，不用 ORM）实现真实后端；按 Phase 0 → 3 逐步交付一个可登录、可上传、可分享、可评论、可写报告的云端表格协作平台。每个阶段结束运行 `pnpm type-check`，不要提交 `.env`、数据库和 `storage` 文件。
+
+## 26. 协作与验收约定（用户要求，最高优先级）
+
+1. **引导时只罗列要做的步骤（1. 2. 3.），不要解释原因。** 用户主动问“为什么”时才解释；用户明确说“讨论”某个方案时，可以正常展开论述。
+2. **一次一格。** 先给规格让用户自己写，卡住才补全；只有用户明确说“帮我写 / 补全 / 改改”时才代写。
+3. **每格验收。** 前端在仓库根目录运行 `pnpm type-check`（若后续拆分为 `client/`，则在 `client/` 运行 `npx tsc --noEmit`）；后端在 `server/` 运行 `npx tsc --noEmit`。每格都必须通过验收。
+4. **curl 验证语句必须使用 Git Bash 可用语法。** 不要使用 PowerShell 或 cmd 专属语法；JSON 使用单引号。提取登录 token 使用以下命令（已在该环境验证）：
+   ```bash
+   TOKEN=$(curl -sS --noproxy '*' -X POST "$BASE/auth/login" -H 'Content-Type: application/json' -d '{"email":"auth-test@example.com","password":"demo1234"}' | grep -o '"token":"[^"]*"' | cut -d'"' -f4)
+   ```
+   不要使用 `node -e` 解析 token；在该环境下未成功。
+5. **测试数据必须清理。** 因测试新建的账号、工作空间、文件、评论、分享、报告等，测试完成后必须删除；只有后续开发确实需要的才保留。测试账号统一使用 `auth-test@example.com`，测试后用 SQL 删除对应工作空间和用户。
+6. **输出格式固定为：开工前先列文件清单和职责，完成后逐文件说明实际改动。** 格式见第 27 节。
+
+## 27. 每格输出格式（固定）
+
+每格分两次输出：开工前只给「文件清单 + 职责 + 验收」，不写代码；用户写完或明确要求代写并验收通过后，再输出「已实现文件 + 实际内容 + 验证结果」。
+
+### 27.1 开工前格式
+
+```
+第 N 格：<格名称>
+
+| 文件 | 要做的事 |
+|---|---|
+| `path/to/file` | ... |
+| `path/to/file` | ... |
+
+验收：
+1. ...
+2. ...
+```
+
+示例：
+
+```
+第 3 格：后端 auth
+
+| 文件 | 要做的事 |
+|---|---|
+| `server/src/utils/httpError.ts` | 定义带 statusCode 的 HttpError |
+| `server/src/services/auth.ts` | 注册事务：user + 个人 workspace + owner membership |
+| `server/src/routes/auth.ts` | register / login / me 三个接口 |
+
+验收：
+1. `cd server && npx tsc --noEmit` 通过
+2. 注册 201、重复注册 409、登录 200、无 token 访问 me 为 401
+```
+
+### 27.2 完成后格式
+
+```
+第 N 格完成。
+
+**已实现**
+- `path/to/file`：实际做了什么
+- `path/to/file`：实际做了什么
+
+**验证结果**
+- ...
+- ...
+
+**测试数据**
+- 新建：...
+- 清理：...
+```
+
+示例：
+
+```
+第 3 格完成。
+
+**已实现**
+- `server/src/utils/httpError.ts`：新增 HttpError，包含 statusCode
+- `server/src/services/auth.ts`：注册时事务写入用户、个人工作空间和 owner 成员
+- `server/src/routes/auth.ts`：新增 register / login / me
+
+**验证结果**
+- `npx tsc --noEmit`：通过
+- 注册 201、重复注册 409、登录 200、无 token 访问 me 为 401
+
+**测试数据**
+- 新建：auth-test@example.com、Auth Test 的工作空间
+- 清理：已删除测试用户和对应工作空间
+```

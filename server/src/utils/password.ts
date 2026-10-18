@@ -1,0 +1,14 @@
+// 说明：后端校验password的逻辑实现
+
+import { compare, hash } from "bcryptjs";
+
+export function hashPassword(password: string): Promise<string> {
+  return hash(password, 10);
+}
+
+export function verifyPassword(
+  password: string,
+  passwordHash: string
+): Promise<boolean> {
+  return compare(password, passwordHash);
+}
