@@ -4,6 +4,7 @@ import { authRequired } from "./middleware/auth";
 import { errorHandler, notFoundHandler } from "./middleware/error";
 import { authRouter } from "./routes/auth";
 import { filesRouter } from "./routes/files";
+import { versionsRouter } from "./routes/versions";
 import { workspacesRouter } from "./routes/workspaces";
 
 export function createApp() {
@@ -11,7 +12,7 @@ export function createApp() {
 
   // 后端通过配置CORS响应头设置允许跨域
   app.use(cors({ origin: process.env.CORS_ORIGIN ?? "http://localhost:5173" }));
-  app.use(express.json());
+  app.use(express.json({ limit: "10mb" }));
 
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true });
@@ -23,6 +24,7 @@ export function createApp() {
     authRequired,
     filesRouter
   );
+  app.use("/api/versions", authRequired, versionsRouter);
   app.use("/api/workspaces", authRequired, workspacesRouter);
 
   // 成功的请求在前面就处理完返回了，走不到这两步。

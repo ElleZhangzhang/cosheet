@@ -32,6 +32,15 @@ interface CreateFileInput {
   rowCount: number;
 }
 
+interface ChunkInput {
+  rows: Record<string, unknown>[];
+}
+
+interface CompleteInput {
+  rowCount: number;
+  chunkCount: number;
+}
+
 // 用来校验请求体body是object
 function asObject(body: unknown): Record<string, unknown> {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
@@ -217,4 +226,50 @@ export function validateCreateFileInput(body: unknown): CreateFileInput {
 }
 //#endregion
 
-export type { FileColumnInput, CreateFileInput };
+//#region 4.version相关校验
+// 校验上传分片的 rows
+export function validateChunkInput(body: unknown): ChunkInput {
+  const data = asObject(body);
+
+  if (!Array.isArray(data.rows) || data.rows.length === 0) {
+    throw new HttpError(400, "rows 不能为空");
+  }
+  if (data.rows.length > 500) {
+    throw new HttpError(400, "rows 不能超过 500 行");
+  }
+
+  const rows = data.rows.map((row, index) => {
+    if (typeof row !== "object" || row === null || Array.isArray(row)) {
+      throw new HttpError(400, `第 ${index + 1} 行格式不正确`);
+    }
+
+    return row as Record<string, unknown>;
+  });
+
+  return { rows };
+}
+
+function validatePositiveInteger(value: unknown, field: string): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    value <= 0
+  ) {
+    throw new HttpError(400, `${field} 必须是大于 0 的整数`);
+  }
+
+  return value;
+}
+
+// 校验 complete 请求体
+export function validateCompleteInput(body: unknown): CompleteInput {
+  const data = asObject(body);
+
+  return {
+    rowCount: validatePositiveInteger(data.rowCount, "rowCount"),
+    chunkCount: validatePositiveInteger(data.chunkCount, "chunkCount"),
+  };
+}
+//#endregion
+
+export type { FileColumnInput, CreateFileInput, ChunkInput, CompleteInput };
