@@ -14,6 +14,23 @@ interface MeResponse {
   user: User;
 }
 
+type WorkspaceRole = "owner" | "editor" | "commenter" | "viewer";
+
+interface Workspace {
+  id: string;
+  name: string;
+  role: WorkspaceRole;
+  createdAt: string;
+}
+
+interface WorkspacesResponse {
+  workspaces: Workspace[];
+}
+
+interface CreateWorkspaceResponse {
+  workspace: Workspace;
+}
+
 interface RegisterInput {
   email: string;
   password: string;
@@ -34,6 +51,10 @@ export type {
   User,
   AuthResponse,
   MeResponse,
+  WorkspaceRole,
+  Workspace,
+  WorkspacesResponse,
+  CreateWorkspaceResponse,
   RegisterInput,
   LoginInput,
   ApiErrorBody,

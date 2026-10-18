@@ -46,6 +46,7 @@ function redirectToLogin(): void {
   window.location.assign(`/login?redirect=${redirect}`);
 }
 
+// 统一封装request用于发送请求，自动带token的逻辑就是在这里实现的
 async function request<T>(
   path: string,
   options: RequestOptions = {}

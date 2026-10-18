@@ -3,11 +3,13 @@ import express from "express";
 import { authRequired } from "./middleware/auth";
 import { errorHandler, notFoundHandler } from "./middleware/error";
 import { authRouter } from "./routes/auth";
+import { filesRouter } from "./routes/files";
 import { workspacesRouter } from "./routes/workspaces";
 
 export function createApp() {
   const app = express();
 
+  // 后端通过配置CORS响应头设置允许跨域
   app.use(cors({ origin: process.env.CORS_ORIGIN ?? "http://localhost:5173" }));
   app.use(express.json());
 
@@ -16,6 +18,11 @@ export function createApp() {
   });
 
   app.use("/api/auth", authRouter);
+  app.use(
+    "/api/workspaces/:workspaceId/files",
+    authRequired,
+    filesRouter
+  );
   app.use("/api/workspaces", authRequired, workspacesRouter);
 
   // 成功的请求在前面就处理完返回了，走不到这两步。

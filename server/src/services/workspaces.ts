@@ -4,8 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { PoolConnection } from "mysql2/promise";
 import type { RowDataPacket } from "mysql2";
 import { pool } from "../db/pool";
-
-type WorkspaceRole = "owner" | "editor" | "commenter" | "viewer";
+import type { WorkspaceRole } from "./permissions";
 
 interface Workspace {
   id: string;

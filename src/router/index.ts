@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from "vue-router";
 import { useAuthStore } from "@/stores/auth";
 import LoginView from "@/views/LoginView.vue";
 
+// LIGHT 路由懒加载
 const router = createRouter({
   history: createWebHistory(),
   routes: [
@@ -18,6 +19,12 @@ const router = createRouter({
     {
       path: "/workspaces",
       name: "workspaces",
+      component: () => import("@/views/WorkspaceView.vue"),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: "/workspaces/:workspaceId",
+      name: "workspace",
       component: () => import("@/views/WorkspaceView.vue"),
       meta: { requiresAuth: true },
     },
