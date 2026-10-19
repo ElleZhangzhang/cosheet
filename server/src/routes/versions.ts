@@ -4,6 +4,7 @@ import { getVersionRows } from "../services/versionRows";
 import {
   cancelVersion,
   completeVersion,
+  listUploadedChunks,
   uploadChunk,
 } from "../services/versions";
 import { HttpError } from "../utils/httpError";
@@ -44,6 +45,19 @@ function getChunkIndex(
 
   return index;
 }
+
+// GET /api/versions/:versionId/chunks
+versionsRouter.get(
+  "/:versionId/chunks",
+  asyncHandler(async (req, res) => {
+    const result = await listUploadedChunks(
+      getUserId(req.userId),
+      getVersionId(req.params.versionId)
+    );
+
+    res.json(result);
+  })
+);
 
 // GET /api/versions/:versionId/rows
 versionsRouter.get(

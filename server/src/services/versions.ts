@@ -26,6 +26,25 @@ interface ChunkStatsRow extends RowDataPacket {
   total: number;
 }
 
+interface ChunkIndexRow extends RowDataPacket {
+  chunk_index: number;
+  row_count: number;
+}
+
+interface UploadedChunk {
+  index: number;
+  rowCount: number;
+}
+
+interface VersionChunksResult {
+  versionId: string;
+  fileId: string;
+  status: "uploading";
+  rowCount: number;
+  chunkCount: number;
+  chunks: UploadedChunk[];
+}
+
 interface CompleteResult {
   version: {
     id: string;
@@ -62,7 +81,54 @@ async function getVersionContext(
   return version;
 }
 
-// 上传单个分片；同一 index 重传时覆盖
+// 查询 uploading 版本已经上传的分片，供断点续传使用
+export async function listUploadedChunks(
+  userId: string,
+  versionId: string
+): Promise<VersionChunksResult> {
+  const version = await getVersionContext(versionId);
+  await assertWorkspaceAccess(userId, version.workspace_id, [
+    "owner",
+    "editor",
+  ]);
+
+  if (version.status !== "uploading") {
+    throw new HttpError(409, "版本已完成上传，不能续传");
+  }
+
+  const [rows] = await pool.execute<ChunkIndexRow[]>(
+    `SELECT chunk_index, row_count
+     FROM chunks
+     WHERE version_id = ?
+     ORDER BY chunk_index ASC`,
+    [versionId]
+  );
+
+  // 数据库有记录还不够，必须确认磁盘文件也存在
+  const checked = await Promise.all(
+    rows.map(async (row) => ({
+      index: row.chunk_index,
+      rowCount: row.row_count,
+      exists: await chunkFileExists(versionId, row.chunk_index),
+    }))
+  );
+
+  return {
+    versionId: version.id,
+    fileId: version.file_id,
+    status: "uploading",
+    rowCount: version.row_count,
+    chunkCount: version.chunk_count,
+    chunks: checked
+      .filter((chunk) => chunk.exists)
+      .map((chunk) => ({
+        index: chunk.index,
+        rowCount: chunk.rowCount,
+      })),
+  };
+}
+
+// 上传单个分片；同一index重传时覆盖
 export async function uploadChunk(
   userId: string,
   versionId: string,
@@ -89,8 +155,9 @@ export async function uploadChunk(
     throw new HttpError(400, "分片行数必须为 1–500");
   }
 
+  // 数据写入磁盘
   const storageKey = await writeChunk(versionId, index, rows);
-
+  // 分片信息写入数据库
   await pool.execute(
     `INSERT INTO chunks (id, version_id, chunk_index, row_count, storage_key)
      VALUES (?, ?, ?, ?, ?)
@@ -212,6 +279,8 @@ export async function cancelVersion(
     throw new HttpError(409, "只能取消上传中的版本");
   }
 
+  // 删磁盘文件
   await deleteVersionChunks(versionId);
+  // 删数据库记录
   await pool.execute("DELETE FROM file_versions WHERE id = ?", [versionId]);
 }

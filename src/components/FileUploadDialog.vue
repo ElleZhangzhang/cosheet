@@ -1,9 +1,28 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import { ApiError } from "@/api/http";
 import { useFileParser } from "@/composables/useFileParse";
 import { createFile } from "@/services/files";
-import { completeVersion, uploadChunk } from "@/services/versions";
+import {
+  cancelVersion,
+  completeVersion,
+  uploadChunk,
+} from "@/services/versions";
 import type { ParsedSheet } from "@/types";
+
+type Phase = "idle" | "creating" | "uploading" | "completing" | "cancelling";
+
+type ChunkUploadResult =
+  | { ok: true }
+  | { ok: false; fatal: boolean; message: string };
+
+interface PoolResult {
+  failed: number[];
+  fatalMessage: string | null;
+}
+
+const CONCURRENCY = 3;
+const MAX_ATTEMPTS = 3;
 
 const props = defineProps<{
   open: boolean;
@@ -13,6 +32,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: "update:open", value: boolean): void;
   (e: "created"): void;
+  (e: "cancelled"): void;
 }>();
 
 const { parseFile } = useFileParser();
@@ -20,9 +40,105 @@ const { parseFile } = useFileParser();
 const fileInput = ref<HTMLInputElement>();
 const sheet = ref<ParsedSheet | null>(null);
 const parsing = ref(false);
-const uploading = ref(false);
 const error = ref("");
-const progress = ref({ current: 0, total: 0 });
+
+const phase = ref<Phase>("idle");
+const versionId = ref<string | null>(null);
+const totalChunks = ref(0);
+const completedChunks = ref(0);
+const failedChunks = ref<number[]>([]);
+const fatalError = ref(false);
+const cancelRequested = ref(false);
+
+const busy = computed(() => phase.value !== "idle");
+
+const progressPercent = computed(() =>
+  totalChunks.value === 0
+    ? 0
+    : Math.round((completedChunks.value / totalChunks.value) * 100)
+);
+
+const canRetryComplete = computed(
+  () =>
+    versionId.value !== null &&
+    totalChunks.value > 0 &&
+    completedChunks.value >= totalChunks.value &&
+    failedChunks.value.length === 0 &&
+    phase.value === "idle" &&
+    error.value !== ""
+);
+
+const primaryDisabled = computed(() => {
+  if (!sheet.value || busy.value || fatalError.value) {
+    return true;
+  }
+  if (failedChunks.value.length > 0 || canRetryComplete.value) {
+    return false;
+  }
+
+  return versionId.value !== null;
+});
+
+// #region 状态机的按钮文字
+const primaryLabel = computed(() => {
+  if (phase.value === "creating") {
+    return "创建中...";
+  }
+  if (phase.value === "uploading") {
+    return "上传中...";
+  }
+  if (phase.value === "completing") {
+    return "完成中...";
+  }
+  if (phase.value === "cancelling") {
+    return "取消中...";
+  }
+  if (fatalError.value) {
+    return "上传失败";
+  }
+  if (failedChunks.value.length > 0) {
+    return "重试失败分片";
+  }
+  if (canRetryComplete.value) {
+    return "重试完成";
+  }
+
+  return "开始上传";
+});
+
+const cancelLabel = computed(() => {
+  if (phase.value === "cancelling") {
+    return "取消中...";
+  }
+  if (phase.value === "completing") {
+    return "完成中...";
+  }
+  if (phase.value === "creating" || phase.value === "uploading") {
+    return "取消上传";
+  }
+
+  return "取消";
+});
+
+const cancelDisabled = computed(
+  () => phase.value === "completing" || phase.value === "cancelling"
+);
+
+const phaseText = computed(() => {
+  switch (phase.value) {
+    case "creating":
+      return "正在创建文件和版本...";
+    case "uploading":
+      return "正在上传分片...";
+    case "completing":
+      return "正在完成版本...";
+    case "cancelling":
+      return "正在取消...";
+    default:
+      return "";
+  }
+});
+//#endregion
 
 const columnPreview = computed(() => {
   if (!sheet.value) {
@@ -34,21 +150,71 @@ const columnPreview = computed(() => {
   return labels.join("、") + (sheet.value.columns.length > 8 ? "…" : "");
 });
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+// 文件上传完毕 → 重置相关值，等待下一个文件的上传
 function resetDialog(): void {
   sheet.value = null;
   parsing.value = false;
-  uploading.value = false;
   error.value = "";
-  progress.value = { current: 0, total: 0 };
+  phase.value = "idle"; // 空闲的、待机的
+  versionId.value = null;
+  totalChunks.value = 0;
+  completedChunks.value = 0;
+  failedChunks.value = [];
+  fatalError.value = false;
+  cancelRequested.value = false;
+}
+
+async function performCancel(): Promise<void> {
+  phase.value = "cancelling";
+  error.value = "";
+
+  try {
+    if (versionId.value) {
+      await cancelVersion(versionId.value);
+    }
+
+    emit("cancelled");
+    emit("update:open", false);
+    resetDialog();
+  } catch (err) {
+    phase.value = "idle";
+    cancelRequested.value = false;
+    error.value = `取消失败：${err instanceof Error ? err.message : "请重试"}`;
+  }
 }
 
 function closeDialog(): void {
-  if (uploading.value) {
+  if (busy.value) {
+    return;
+  }
+
+  if (versionId.value) {
+    cancelRequested.value = true;
+    void performCancel();
     return;
   }
 
   emit("update:open", false);
   resetDialog();
+}
+
+function handleCancel(): void {
+  if (phase.value === "creating" || phase.value === "uploading") {
+    cancelRequested.value = true;
+    phase.value = "cancelling";
+  }
+}
+
+function handleCancelClick(): void {
+  if (phase.value === "creating" || phase.value === "uploading") {
+    handleCancel();
+  } else {
+    closeDialog();
+  }
 }
 
 function triggerFileInput(): void {
@@ -67,7 +233,6 @@ async function handleFileChange(event: Event): Promise<void> {
 
   sheet.value = null;
   error.value = "";
-  progress.value = { current: 0, total: 0 };
   parsing.value = true;
 
   try {
@@ -79,14 +244,194 @@ async function handleFileChange(event: Event): Promise<void> {
   }
 }
 
-async function handleUpload(): Promise<void> {
+// LIGHT
+// 1. 单块上传 + 重试机制
+// 2. return boolean
+async function uploadChunkWithRetry(
+  index: number
+): Promise<ChunkUploadResult> {
   const parsed = sheet.value;
-  if (!parsed || parsing.value || uploading.value) {
+  const currentVersionId = versionId.value;
+
+  if (!parsed || !currentVersionId) {
+    return {
+      ok: false,
+      fatal: true,
+      message: "上传状态已丢失，请重新上传",
+    };
+  }
+
+  const start = index * 500;
+  const rows = parsed.rows.slice(start, start + 500);
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+    if (cancelRequested.value) {
+      return { ok: false, fatal: false, message: "上传已取消" };
+    }
+
+    try {
+      await uploadChunk(currentVersionId, index, rows);
+      return { ok: true };
+    } catch (err) {
+      // 4xx 是致命错误：继续传其他分片也不会成功
+      const clientError =
+        err instanceof ApiError && err.status >= 400 && err.status < 500;
+
+      if (clientError) {
+        return {
+          ok: false,
+          fatal: true,
+          message: getErrorMessage(err, "分片上传失败"),
+        };
+      }
+
+      if (attempt === MAX_ATTEMPTS) {
+        return {
+          ok: false,
+          fatal: false,
+          message: getErrorMessage(err, "分片上传失败"),
+        };
+      }
+
+      // 三次尝试机会，第一次后等0.5s，第二次后等1s
+      await delay(attempt === 1 ? 500 : 1000);
+    }
+  }
+
+  return { ok: false, fatal: false, message: "分片上传失败" };
+}
+
+// LIGHT 并发控制池（这块有JS手撕实现欧）
+async function runPool(indices: number[]): Promise<PoolResult> {
+  const failed: number[] = [];
+  let fatalMessage: string | null = null;
+  let cursor = 0;
+
+  // 并发器
+  async function worker(): Promise<void> {
+    while (true) {
+      // 主动取消，或已经出现致命错误
+      if (cancelRequested.value || fatalMessage !== null) {
+        return;
+      }
+
+      const position = cursor;
+      cursor += 1;
+
+      // 所有请求都发送完了
+      if (position >= indices.length) {
+        return;
+      }
+
+      const index = indices[position];
+      if (index === undefined) {
+        return;
+      }
+
+      // await 请求 → 交出CPU控制权，执行下一个worker
+      const result = await uploadChunkWithRetry(index);
+
+      if (result.ok) {
+        completedChunks.value += 1;
+      } else if (!cancelRequested.value && fatalMessage === null) {
+        if (result.fatal) {
+          fatalMessage = result.message;
+          return;
+        }
+
+        // 非致命失败先记录下来，其他分片继续上传；完成后只需重试这部分
+        failed.push(index);
+      }
+    }
+  }
+
+  const workerCount = Math.min(CONCURRENCY, indices.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+
+  return { failed, fatalMessage };
+}
+
+function getErrorMessage(err: unknown, fallback: string): string {
+  return err instanceof Error ? err.message : fallback;
+}
+
+// 文件上传完成后的最后的兜底校验
+async function finishVersion(): Promise<void> {
+  const parsed = sheet.value;
+  const currentVersionId = versionId.value;
+
+  if (!parsed || !currentVersionId) {
     return;
   }
 
-  uploading.value = true;
+  phase.value = "completing";
   error.value = "";
+
+  try {
+    await completeVersion(currentVersionId, parsed.rowCount, totalChunks.value);
+
+    emit("created");
+    emit("update:open", false);
+    resetDialog();
+  } catch (err) {
+    phase.value = "idle";
+    error.value = `完成失败：${err instanceof Error ? err.message : "请重试"}`;
+  }
+}
+
+async function uploadChunks(indices: number[]): Promise<void> {
+  if (!versionId.value || !sheet.value) {
+    return;
+  }
+
+  phase.value = "uploading";
+  error.value = "";
+
+  const { failed, fatalMessage } = await runPool(indices);
+
+  if (cancelRequested.value) {
+    await performCancel();
+    return;
+  }
+
+  failedChunks.value = failed;
+
+  if (fatalMessage) {
+    fatalError.value = true;
+    phase.value = "idle";
+    error.value = fatalMessage;
+    return;
+  }
+
+  if (failed.length > 0) {
+    phase.value = "idle";
+    error.value = `${failed.length} 个分片上传失败，请重试`;
+    return;
+  }
+
+  if (completedChunks.value < totalChunks.value) {
+    phase.value = "idle";
+    error.value = "仍有分片未上传";
+    return;
+  }
+
+  await finishVersion();
+}
+
+async function startUpload(): Promise<void> {
+  const parsed = sheet.value;
+
+  if (!parsed || busy.value) {
+    return;
+  }
+
+  error.value = "";
+  failedChunks.value = [];
+  fatalError.value = false;
+  completedChunks.value = 0;
+  totalChunks.value = 0;
+  cancelRequested.value = false;
+  phase.value = "creating";
 
   try {
     const created = await createFile(props.workspaceId, {
@@ -94,37 +439,73 @@ async function handleUpload(): Promise<void> {
       columns: parsed.columns,
       rowCount: parsed.rowCount,
     });
-    const versionId = created.version.id;
 
-    progress.value = { current: 0, total: created.version.chunkCount };
+    versionId.value = created.version.id;
+    totalChunks.value = created.version.chunkCount;
 
-    // 顺序上传；并发、进度条和重试在下一格补充
-    for (let index = 0; index < created.version.chunkCount; index += 1) {
-      const start = index * 500;
-      const rows = parsed.rows.slice(start, start + 500);
-
-      await uploadChunk(versionId, index, rows);
-      progress.value = {
-        current: index + 1,
-        total: created.version.chunkCount,
-      };
+    if (cancelRequested.value) {
+      await performCancel();
+      return;
     }
 
-    await completeVersion(
-      versionId,
-      parsed.rowCount,
-      created.version.chunkCount
+    const indices = Array.from(
+      { length: created.version.chunkCount },
+      (_, index) => index
     );
 
-    emit("created");
-    emit("update:open", false);
-    resetDialog();
+    await uploadChunks(indices);
   } catch (err) {
-    // 失败时保留 uploading 版本，下一格实现重试/取消
-    error.value = err instanceof Error ? err.message : "上传失败";
-  } finally {
-    uploading.value = false;
+    if (cancelRequested.value) {
+      await performCancel();
+      return;
+    }
+
+    // 这俩是响应式数据欧
+    phase.value = "idle";
+    error.value = `创建失败：${err instanceof Error ? err.message : "请重试"}`;
   }
+}
+
+async function retryFailed(): Promise<void> {
+  if (
+    busy.value ||
+    fatalError.value ||
+    failedChunks.value.length === 0
+  ) {
+    return;
+  }
+
+  const indices = [...failedChunks.value];
+  failedChunks.value = [];
+  error.value = "";
+
+  await uploadChunks(indices);
+}
+
+async function retryComplete(): Promise<void> {
+  if (busy.value || !canRetryComplete.value) {
+    return;
+  }
+
+  await finishVersion();
+}
+
+function handlePrimary(): void {
+  if (primaryDisabled.value) {
+    return;
+  }
+
+  if (failedChunks.value.length > 0) {
+    void retryFailed();
+    return;
+  }
+
+  if (canRetryComplete.value) {
+    void retryComplete();
+    return;
+  }
+
+  void startUpload();
 }
 
 watch(
@@ -146,7 +527,7 @@ watch(
           <button
             type="button"
             class="close-btn"
-            :disabled="uploading"
+            :disabled="busy"
             @click="closeDialog"
           >
             ×
@@ -165,7 +546,7 @@ watch(
           <button
             type="button"
             class="select-btn"
-            :disabled="parsing || uploading"
+            :disabled="parsing || busy || versionId !== null"
             @click="triggerFileInput"
           >
             {{ parsing ? "正在解析..." : "选择 Excel / CSV 文件" }}
@@ -180,11 +561,26 @@ watch(
             <p class="column-preview">列：{{ columnPreview }}</p>
           </div>
 
-          <p v-if="uploading" class="progress">
-            正在上传 {{ progress.current }} / {{ progress.total }} 片
-          </p>
+          <div v-if="totalChunks > 0" class="progress-block">
+            <div class="progress-track">
+              <div
+                class="progress-fill"
+                :style="{ width: `${progressPercent}%` }"
+              ></div>
+            </div>
+            <p class="progress-text">
+              {{ completedChunks }} / {{ totalChunks }} 片 ·
+              {{ progressPercent }}%
+            </p>
+          </div>
+
+          <p v-if="phaseText" class="phase-text">{{ phaseText }}</p>
 
           <p v-if="error" class="error">{{ error }}</p>
+
+          <p v-if="fatalError" class="fatal-hint">
+            该错误无法通过重试解决，请取消后重新上传。
+          </p>
 
           <p v-if="!sheet && !parsing && !error" class="hint">
             支持 .xlsx、.xls、.csv，只解析第一个工作表。
@@ -195,18 +591,18 @@ watch(
           <button
             type="button"
             class="ghost-btn"
-            :disabled="uploading"
-            @click="closeDialog"
+            :disabled="cancelDisabled"
+            @click="handleCancelClick"
           >
-            取消
+            {{ cancelLabel }}
           </button>
           <button
             type="button"
             class="primary-btn"
-            :disabled="!sheet || parsing || uploading"
-            @click="handleUpload"
+            :disabled="primaryDisabled"
+            @click="handlePrimary"
           >
-            {{ uploading ? "上传中..." : "开始上传" }}
+            {{ primaryLabel }}
           </button>
         </footer>
       </div>
@@ -325,8 +721,32 @@ watch(
   word-break: break-all;
 }
 
-.progress {
-  margin: 16px 0 0;
+.progress-block {
+  margin-top: 18px;
+}
+
+.progress-track {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(191, 161, 117, 0.12);
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #bfa175 0%, #d8b08a 100%);
+  transition: width 0.2s ease;
+}
+
+.progress-text {
+  margin: 8px 0 0;
+  color: #8a7355;
+  font-size: 12px;
+}
+
+.phase-text {
+  margin: 12px 0 0;
   color: #8a7355;
   font-size: 13px;
 }
@@ -345,6 +765,13 @@ watch(
 .hint {
   margin: 14px 0 0;
   color: #aaa;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.fatal-hint {
+  margin: 10px 0 0;
+  color: #b06a6a;
   font-size: 12px;
   line-height: 1.6;
 }

@@ -82,6 +82,11 @@ async function handleUploaded(): Promise<void> {
   await loadFiles();
 }
 
+async function handleUploadCancelled(): Promise<void> {
+  uploadOpen.value = false;
+  await loadFiles();
+}
+
 function formatTime(value: string): string {
   const date = new Date(value);
   // 1.date.getTime：返回从1970年1月1日到现在的毫秒数（时间戳）
@@ -292,6 +297,7 @@ watch(
       v-model:open="uploadOpen"
       :workspace-id="currentWorkspace.id"
       @created="handleUploaded"
+      @cancelled="handleUploadCancelled"
     />
     <!-- created何时触发？子组件emit时 -->
   </div>

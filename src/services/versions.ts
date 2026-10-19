@@ -33,4 +33,10 @@ function completeVersion(
   );
 }
 
-export { uploadChunk, completeVersion };
+function cancelVersion(versionId: string): Promise<null> {
+  return request<null>(`/versions/${versionId}`, {
+    method: "DELETE",
+  });
+}
+
+export { uploadChunk, completeVersion, cancelVersion };
