@@ -3,7 +3,8 @@
 import { randomUUID } from "node:crypto";
 import type { RowDataPacket } from "mysql2";
 import { pool } from "../db/pool";
-import type { CreateFileInput } from "../utils/validate";
+import { HttpError } from "../utils/httpError";
+import type { CreateFileInput, FileColumnInput } from "../utils/validate";
 import { assertWorkspaceAccess } from "./permissions";
 
 interface CreatedFileVersion {
@@ -55,7 +56,7 @@ function getChunkCount(rowCount: number): number {
   return Math.ceil(rowCount / 500);
 }
 
-// 创建文件 + 第一个 uploading 版本
+// 创建文件基本信息
 export async function createFileWithVersion(
   userId: string,
   workspaceId: string,
@@ -171,4 +172,141 @@ export async function listFiles(
         }
         : null,
   }));
+}
+
+interface FileRow extends RowDataPacket {
+  id: string;
+  workspace_id: string;
+  name: string;
+  latest_version_number: number;
+  created_at: Date;
+  updated_at: Date;
+}
+
+interface VersionRow extends RowDataPacket {
+  id: string;
+  version_number: number;
+  status: string;
+  columns_json: unknown;
+  row_count: number;
+  chunk_count: number;
+  created_at: Date;
+}
+
+interface VersionSummary {
+  id: string;
+  versionNumber: number;
+  status: string;
+  columns: FileColumnInput[];
+  rowCount: number;
+  chunkCount: number;
+  createdAt: Date;
+}
+
+interface FileDetail {
+  file: {
+    id: string;
+    name: string;
+    latestVersionNumber: number;
+    createdAt: Date;
+    updatedAt: Date;
+  };
+  latestVersion: VersionSummary | null;
+  versions: VersionSummary[];
+}
+
+// mysql2可能把 JSON列解析成对象，也可能返回字符串
+function parseColumns(value: unknown): FileColumnInput[] {
+  const parsed = typeof value === "string" ? JSON.parse(value) : value;
+
+  if (!Array.isArray(parsed)) {
+    throw new Error("版本列定义损坏");
+  }
+
+  return parsed as FileColumnInput[];
+}
+
+// 查询未删除的文件，并校验当前用户的工作空间权限
+async function getAccessibleFile(
+  userId: string,
+  fileId: string
+): Promise<FileRow> {
+  const [rows] = await pool.execute<FileRow[]>(
+    `SELECT id, workspace_id, name, latest_version_number,
+            created_at, updated_at
+     FROM files
+     WHERE id = ? AND deleted_at IS NULL
+     LIMIT 1`,
+    [fileId]
+  );
+  const file = rows[0];
+
+  if (!file) {
+    throw new HttpError(404, "文件不存在");
+  }
+
+  await assertWorkspaceAccess(userId, file.workspace_id);
+
+  return file;
+}
+
+// 查询文件的所有版本，新版本在前
+async function queryVersions(fileId: string): Promise<VersionSummary[]> {
+  const [rows] = await pool.execute<VersionRow[]>(
+    `SELECT id, version_number, status, columns_json, row_count,
+            chunk_count, created_at
+     FROM file_versions
+     WHERE file_id = ?
+     ORDER BY version_number DESC`,
+    [fileId]
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    versionNumber: row.version_number,
+    status: row.status,
+    columns: parseColumns(row.columns_json),
+    rowCount: row.row_count,
+    chunkCount: row.chunk_count,
+    createdAt: row.created_at,
+  }));
+}
+
+// 文件详情：文件基本信息+最新ready版本+全部版本
+export async function getFileDetail(
+  userId: string,
+  fileId: string
+): Promise<FileDetail> {
+  const file = await getAccessibleFile(userId, fileId);
+  const versions = await queryVersions(fileId);
+
+  const latestVersion =
+    versions.find(
+      (version) =>
+        version.versionNumber === file.latest_version_number &&
+        version.status === "ready"
+    ) ?? null;
+
+  return {
+    file: {
+      id: file.id,
+      name: file.name,
+      latestVersionNumber: file.latest_version_number,
+      createdAt: file.created_at,
+      updatedAt: file.updated_at,
+    },
+    latestVersion,
+    versions,
+  };
+}
+
+// 版本列表
+// oh~有点像git log的感觉
+export async function listFileVersions(
+  userId: string,
+  fileId: string
+): Promise<VersionSummary[]> {
+  await getAccessibleFile(userId, fileId);
+
+  return queryVersions(fileId);
 }

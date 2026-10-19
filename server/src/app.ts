@@ -3,6 +3,7 @@ import express from "express";
 import { authRequired } from "./middleware/auth";
 import { errorHandler, notFoundHandler } from "./middleware/error";
 import { authRouter } from "./routes/auth";
+import { fileDetailRouter } from "./routes/fileDetail";
 import { filesRouter } from "./routes/files";
 import { versionsRouter } from "./routes/versions";
 import { workspacesRouter } from "./routes/workspaces";
@@ -24,6 +25,7 @@ export function createApp() {
     authRequired,
     filesRouter
   );
+  app.use("/api/files", authRequired, fileDetailRouter);
   app.use("/api/versions", authRequired, versionsRouter);
   app.use("/api/workspaces", authRequired, workspacesRouter);
 
