@@ -41,6 +41,16 @@ interface CompleteInput {
   chunkCount: number;
 }
 
+type SortDir = "asc" | "desc";
+
+interface RowsQuery {
+  offset: number; // 从第几条开始看
+  limit: number; // 看多少条
+  q: string; // 搜索关键词
+  sortBy: string | null; // 字段名
+  sortDir: SortDir; // asc/desc
+}
+
 // 用来校验请求体body是object
 function asObject(body: unknown): Record<string, unknown> {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
@@ -272,4 +282,82 @@ export function validateCompleteInput(body: unknown): CompleteInput {
 }
 //#endregion
 
-export type { FileColumnInput, CreateFileInput, ChunkInput, CompleteInput };
+//#region 5.rows查询参数校验
+// 校验参数为安全的数字
+function parseIntegerParam(
+  value: unknown,
+  field: string,
+  fallback: number
+): number {
+  if (value === undefined) {
+    return fallback;
+  }
+  if (typeof value !== "string" || !/^\d+$/.test(value)) {
+    throw new HttpError(400, `${field} 必须是非负整数`);
+  }
+
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new HttpError(400, `${field} 不合法`);
+  }
+
+  return parsed;
+}
+
+// 校验rows接口的query参数
+export function validateRowsQuery(
+  query: Record<string, unknown>,
+  columns: FileColumnInput[]
+): RowsQuery {
+  // '?offset=100&&limit=20'
+  const offset = parseIntegerParam(query.offset, "offset", 0);
+  const limit = parseIntegerParam(query.limit, "limit", 200);
+
+  if (limit < 1 || limit > 500) {
+    throw new HttpError(400, "limit 必须在 1–500 之间");
+  }
+
+  let q = "";
+  if (query.q !== undefined) {
+    if (typeof query.q !== "string") {
+      throw new HttpError(400, "q 必须是字符串");
+    }
+    q = query.q.trim().slice(0, 100);
+  }
+
+  let sortBy: string | null = null;
+  const rawSortBy = query.sortBy;
+  if (rawSortBy !== undefined) {
+    if (typeof rawSortBy !== "string" || !rawSortBy) {
+      throw new HttpError(400, "sortBy 不合法");
+    }
+    if (!columns.some((column) => column.keyName === rawSortBy)) {
+      throw new HttpError(400, "sortBy 不是有效列");
+    }
+    sortBy = rawSortBy;
+  }
+
+  let sortDir: SortDir = "asc";
+  const rawSortDir = query.sortDir;
+  if (rawSortDir !== undefined) {
+    if (rawSortDir !== "asc" && rawSortDir !== "desc") {
+      throw new HttpError(400, "sortDir 只能是 asc 或 desc");
+    }
+    if (!sortBy) {
+      throw new HttpError(400, "sortDir 需要配合 sortBy 使用");
+    }
+    sortDir = rawSortDir;
+  }
+
+  return { offset, limit, q, sortBy, sortDir };
+}
+//#endregion
+
+export type {
+  FileColumnInput,
+  CreateFileInput,
+  ChunkInput,
+  CompleteInput,
+  SortDir,
+  RowsQuery,
+};

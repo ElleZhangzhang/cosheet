@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { asyncHandler } from "../middleware/asyncHandler";
+import { getVersionRows } from "../services/versionRows";
 import {
   cancelVersion,
   completeVersion,
@@ -43,6 +44,20 @@ function getChunkIndex(
 
   return index;
 }
+
+// GET /api/versions/:versionId/rows
+versionsRouter.get(
+  "/:versionId/rows",
+  asyncHandler(async (req, res) => {
+    const result = await getVersionRows(
+      getUserId(req.userId),
+      getVersionId(req.params.versionId),
+      req.query as Record<string, unknown>
+    );
+
+    res.json(result);
+  })
+);
 
 // PUT /api/versions/:versionId/chunks/:index
 versionsRouter.put(
