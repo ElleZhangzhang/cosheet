@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import AppSidebar from "@/components/AppSidebar.vue";
+import FileUploadDialog from "@/components/FileUploadDialog.vue";
+import { listFiles } from "@/services/files";
 import { useWorkspaceStore } from "@/stores/workspace";
-import type { WorkspaceRole } from "@/types/api";
+import type { FileSummary, WorkspaceRole } from "@/types/api";
 
 const route = useRoute();
 const router = useRouter();
@@ -22,7 +24,121 @@ function roleLabel(role: WorkspaceRole): string {
   return roleLabels[role];
 }
 
-// 处理url对应的三种情况
+const files = ref<FileSummary[]>([]);
+const filesLoading = ref(false);
+const filesError = ref("");
+const searchQuery = ref("");
+const uploadOpen = ref(false);
+
+let filesRequestId = 0;
+let searchTimer: number | undefined;
+let skipNextSearch = false;
+
+async function loadFiles(): Promise<void> {
+  // 如果用户没选任何工作区（比如刚登录进来）就不发请求，直接把文件列表清空
+  const workspaceId = workspaceStore.currentWorkspaceId;
+  if (!workspaceId) {
+    files.value = [];
+    return;
+  }
+
+  // LIGHT 防竞态请求：比如用户连续切换3个工作区
+  const requestId = ++filesRequestId;
+
+  filesLoading.value = true;
+  filesError.value = "";
+
+  try {
+    const data = await listFiles(workspaceId, searchQuery.value);
+
+    if (requestId !== filesRequestId) {
+      return;
+    }
+
+    files.value = data.files;
+  } catch (err) {
+    if (requestId !== filesRequestId) {
+      return;
+    }
+
+    filesError.value = err instanceof Error ? err.message : "加载文件失败";
+  } finally {
+    if (requestId === filesRequestId) {
+      filesLoading.value = false;
+    }
+  }
+}
+
+async function handleUploaded(): Promise<void> {
+  uploadOpen.value = false;
+
+  if (searchQuery.value !== "") {
+    // 避免：searchQuery="" → 触发watch searchQuery → 两次loadFiles
+    skipNextSearch = true;
+    // 避免loadFiles返回搜索后的文件们，上传后的load是不需要搜索的
+    searchQuery.value = "";
+  }
+
+  await loadFiles();
+}
+
+function formatTime(value: string): string {
+  const date = new Date(value);
+  // 1.date.getTime：返回从1970年1月1日到现在的毫秒数（时间戳）
+  // 2.date.toLocaleString：把时间对象转成本地时区的易读字符串
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+// watch currentWorkspaceId/searchQuery → loadFiles()
+// BUG讲述
+watch(
+  () => workspaceStore.currentWorkspaceId,
+  (workspaceId) => {
+    if (searchTimer !== undefined) {
+      window.clearTimeout(searchTimer);
+      searchTimer = undefined;
+    }
+
+    if (searchQuery.value !== "") {
+      skipNextSearch = true;
+      searchQuery.value = "";
+    }
+
+    if (workspaceId) {
+      void loadFiles();
+    } else {
+      files.value = [];
+    }
+  },
+  { immediate: true }
+);
+
+watch(searchQuery, () => {
+  if (skipNextSearch) {
+    skipNextSearch = false;
+    return;
+  }
+
+  if (!workspaceStore.currentWorkspaceId) {
+    return;
+  }
+
+  if (searchTimer !== undefined) {
+    window.clearTimeout(searchTimer);
+  }
+
+  searchTimer = window.setTimeout(() => {
+    void loadFiles();
+  }, 300);
+});
+
+onBeforeUnmount(() => {
+  if (searchTimer !== undefined) {
+    window.clearTimeout(searchTimer);
+  }
+});
+
+// 处理url对应的三种情况 → 获取workspace
 async function syncRoute(): Promise<void> {
   await workspaceStore.loadWorkspaces();
 
@@ -56,7 +172,7 @@ async function syncRoute(): Promise<void> {
   }
 }
 
-async function retry(): Promise<void> {
+async function retryWorkspaces(): Promise<void> {
   await workspaceStore.loadWorkspaces(true);
   await syncRoute();
 }
@@ -84,28 +200,100 @@ watch(
 
       <div v-else-if="workspaceStore.error" class="status-card error">
         <p>{{ workspaceStore.error }}</p>
-        <button type="button" class="retry-btn" @click="retry">重试</button>
+        <button type="button" class="retry-btn" @click="retryWorkspaces">
+          重试
+        </button>
       </div>
 
       <template v-else-if="currentWorkspace">
         <header class="workspace-topbar">
-          <div>
+          <div class="title-group">
             <h1>{{ currentWorkspace.name }}</h1>
-            <p class="workspace-subtitle">工作空间</p>
+            <span class="role-badge">
+              {{ roleLabel(currentWorkspace.role) }}
+            </span>
           </div>
-          <span class="role-badge">{{ roleLabel(currentWorkspace.role) }}</span>
+
+          <div class="topbar-actions">
+            <input
+              v-model="searchQuery"
+              class="search-input"
+              type="search"
+              placeholder="搜索文件名"
+            />
+            <button type="button" class="upload-btn" @click="uploadOpen = true">
+              上传文件
+            </button>
+          </div>
         </header>
 
         <section class="workspace-content">
-          <div class="placeholder-card">
-            <h2>文件与表格</h2>
-            <p>文件列表、上传和远程表格将在 Phase 1 实现。</p>
+          <div class="content-heading">
+            <h2>文件</h2>
+            <span class="file-count">{{ files.length }} 个</span>
+          </div>
+
+          <div v-if="filesLoading" class="status-card">正在加载文件...</div>
+
+          <div v-else-if="filesError" class="status-card error">
+            <p>{{ filesError }}</p>
+            <button type="button" class="retry-btn" @click="loadFiles()">
+              重试
+            </button>
+          </div>
+
+          <div v-else-if="files.length === 0" class="empty-card">
+            <h3>还没有文件</h3>
+            <p>上传 Excel 或 CSV 文件开始使用。</p>
+            <button type="button" class="upload-btn" @click="uploadOpen = true">
+              上传文件
+            </button>
+          </div>
+
+          <div v-else class="file-list">
+            <article v-for="file in files" :key="file.id" class="file-row">
+              <div class="file-icon">▤</div>
+
+              <div class="file-main">
+                <div class="file-name-row">
+                  <h3>{{ file.name }}</h3>
+                  <span
+                    class="status-badge"
+                    :class="file.version?.status ?? 'uploading'"
+                  >
+                    {{ file.version?.status === "ready" ? "就绪" : "上传中" }}
+                  </span>
+                </div>
+                <p class="file-meta">
+                  <template v-if="file.version">
+                    {{ file.version.rowCount.toLocaleString() }} 行 ·
+                    {{ file.version.columnCount }} 列 · v{{
+                      file.version.versionNumber
+                    }}
+                  </template>
+                  <template v-else>等待上传完成</template>
+                </p>
+              </div>
+
+              <span class="file-time">
+                {{ formatTime(file.updatedAt) }}
+              </span>
+            </article>
           </div>
         </section>
       </template>
 
       <div v-else class="status-card">还没有工作空间，请在左侧新建。</div>
     </main>
+
+    <!-- 上传文件的弹窗 -->
+    <FileUploadDialog
+      v-if="currentWorkspace"
+      v-model:open="uploadOpen"
+      :workspace-id="currentWorkspace.id"
+      @created="handleUploaded"
+    />
+    <!-- created何时触发？子组件emit时 -->
   </div>
 </template>
 
@@ -156,25 +344,31 @@ watch(
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 26px 32px;
+  gap: 20px;
+  padding: 24px 32px;
   border: 1px solid rgba(191, 161, 117, 0.15);
   border-radius: 12px;
   background: #fff;
 }
 
-.workspace-topbar h1 {
-  margin: 0;
-  font-size: 24px;
-  font-weight: 600;
+.title-group {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
 }
 
-.workspace-subtitle {
-  margin: 6px 0 0;
-  color: #999;
-  font-size: 12px;
+.title-group h1 {
+  margin: 0;
+  overflow: hidden;
+  font-size: 24px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .role-badge {
+  flex-shrink: 0;
   padding: 6px 12px;
   border: 1px solid rgba(191, 161, 117, 0.2);
   border-radius: 999px;
@@ -184,26 +378,174 @@ watch(
   font-weight: 600;
 }
 
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.search-input {
+  width: 220px;
+  box-sizing: border-box;
+  padding: 9px 12px;
+  border: 1px solid #e6e0d8;
+  border-radius: 8px;
+  background: #fffdf9;
+  color: #333;
+  font-size: 13px;
+  outline: none;
+}
+
+.search-input:focus {
+  border-color: #bfa175;
+  box-shadow: 0 0 0 3px rgba(191, 161, 117, 0.12);
+}
+
+.upload-btn {
+  padding: 9px 18px;
+  border: none;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #bfa175 0%, #d8b08a 100%);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.upload-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px rgba(191, 161, 117, 0.25);
+}
+
 .workspace-content {
   margin-top: 24px;
 }
 
-.placeholder-card {
-  padding: 40px;
-  border: 1px dashed rgba(191, 161, 117, 0.35);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.6);
+.content-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 0 4px;
 }
 
-.placeholder-card h2 {
-  margin: 0 0 10px;
+.content-heading h2 {
+  margin: 0;
   font-size: 18px;
   font-weight: 600;
 }
 
-.placeholder-card p {
-  margin: 0;
+.file-count {
+  color: #999;
+  font-size: 12px;
+}
+
+.empty-card {
+  padding: 56px 32px;
+  border: 1px dashed rgba(191, 161, 117, 0.35);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.6);
+  text-align: center;
+}
+
+.empty-card h3 {
+  margin: 0 0 8px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.empty-card p {
+  margin: 0 0 20px;
   color: #999;
   font-size: 14px;
+}
+
+.file-list {
+  overflow: hidden;
+  border: 1px solid rgba(191, 161, 117, 0.15);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 22px;
+  border-bottom: 1px solid rgba(191, 161, 117, 0.1);
+  transition: background-color 0.2s;
+}
+
+.file-row:last-child {
+  border-bottom: none;
+}
+
+.file-row:hover {
+  background: rgba(191, 161, 117, 0.03);
+}
+
+.file-icon {
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: rgba(191, 161, 117, 0.1);
+  color: #bfa175;
+  font-size: 18px;
+}
+
+.file-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.file-name-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.file-name-row h3 {
+  margin: 0;
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-badge {
+  flex-shrink: 0;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.status-badge.ready {
+  background: #f0f9eb;
+  color: #67c23a;
+}
+
+.status-badge.uploading {
+  background: rgba(191, 161, 117, 0.12);
+  color: #8a7355;
+}
+
+.file-meta {
+  margin: 6px 0 0;
+  color: #999;
+  font-size: 12px;
+}
+
+.file-time {
+  flex-shrink: 0;
+  color: #aaa;
+  font-size: 12px;
 }
 </style>

@@ -104,6 +104,7 @@ export async function uploadChunk(
 }
 
 // 大文件分片上传完成后的收尾校验与状态更新：把版本置为 ready，并更新文件最新版本号
+// FIND 要是校验出错误，是否改delete所有文件分片数据，由后端直接做还是先告诉前端让用户决定？
 export async function completeVersion(
   userId: string,
   versionId: string,

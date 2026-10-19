@@ -1,12 +1,12 @@
 import * as XLSX from 'xlsx'
-import type { DataRow, ColumnDef, Dataset } from '@/types/index'
+import type { DataRow, ColumnDef, ParsedSheet } from '@/types/index'
 
 type WorkerInMessage = {
   file: File
 }
 
 type WorkerOutMessage =
-  | { ok: true; dataset: Dataset }
+  | { ok: true; sheet: ParsedSheet }
   | { ok: false; message: string }
 
 // 推断每列数据的类型
@@ -31,13 +31,13 @@ const inferColumnType = (key: string, data: any[]): ColumnDef['type'] => {
 }
 
 // Web Worker入口：主线程一发消息，这里就开始执行解析流程
+// 解析excel文件
 self.onmessage = (event: MessageEvent<WorkerInMessage>) => {
   try {
     // 1. 拿到主线程传过来的数据
     const { file } = event.data
 
-    // 2. 接下来该咋办咋办，第2步和web worker没有关系
-    // 解析文件数据
+    // 2. 解析文件数据
     // #region
     const reader = new FileReaderSync()
     const binaryData = reader.readAsBinaryString(file)
@@ -57,8 +57,27 @@ self.onmessage = (event: MessageEvent<WorkerInMessage>) => {
     const jsonData = XLSX.utils.sheet_to_json(worksheet)
     //#endregion
 
-    // 根据解析好的文件数据创建一个dataset
+    if (jsonData.length === 0) {
+      throw new Error('工作表没有数据行')
+    }
+
+    // 3. 根据解析好的数据创建 ParsedSheet（原来是dataset）
     // #region
+    // 最后rows大概长这样：
+    // [
+    //   {
+    //     "id": "row-0",
+    //     "姓名": "张三",
+    //     "年龄": 20,
+    //     "城市": "北京"
+    //   },
+    //   {
+    //     "id": "row-1",
+    //     "姓名": "李四",
+    //     "年龄": 22,
+    //     "城市": "上海"
+    //   }
+    // ]
     const rows: DataRow[] = jsonData.map((row, index) => ({
       id: `row-${index}`,
       ...(row as Record<string, any>)
@@ -66,6 +85,9 @@ self.onmessage = (event: MessageEvent<WorkerInMessage>) => {
 
     const firstRow = jsonData[0] as object
     const columnKeys = Object.keys(firstRow)
+    if (columnKeys.length === 0) {
+      throw new Error('工作表没有可用列')
+    }
 
     const columns: ColumnDef[] = columnKeys.map(column => ({
       keyName: column,
@@ -74,26 +96,23 @@ self.onmessage = (event: MessageEvent<WorkerInMessage>) => {
       width: 150
     }))
 
-    const dataset: Dataset = {
-      id: `dataset-${Date.now()}`,
+    const sheet: ParsedSheet = {
       name: file.name,
       rows,
       columns,
-      createAt: Date.now(),
       rowCount: rows.length,
       columnCount: columns.length,
     }
     //#endregion
 
-    // 3. 把结果 postMessage 回主线程，成功就回 dataset
-    const payload: WorkerOutMessage = { ok: true, dataset }
+    // 4. 把结果 postMessage 回主线程
+    const payload: WorkerOutMessage = { ok: true, sheet }
     self.postMessage(payload)
   } catch (error) {
     const payload: WorkerOutMessage = {
       ok: false,
       message: error instanceof Error ? error.message : '文件解析失败'
     }
-    // 3. 异常就回错误信息
     self.postMessage(payload)
   }
 }
