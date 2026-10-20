@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ApiError } from "@/api/http";
 import { useFileParser } from "@/composables/useFileParse";
 import { createFile } from "@/services/files";
@@ -72,6 +72,24 @@ const fatalError = ref(false);
 const cancelRequested = ref(false);
 
 const busy = computed(() => phase.value !== "idle");
+
+// 如果在上传中要unload，那么阻止默认行为
+function handleBeforeUnload(event: BeforeUnloadEvent): void {
+  if (!busy.value) {
+    return;
+  }
+
+  event.preventDefault();
+  event.returnValue = "";
+}
+
+onMounted(() => {
+  window.addEventListener("beforeunload", handleBeforeUnload);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("beforeunload", handleBeforeUnload);
+});
 
 const progressPercent = computed(() =>
   totalChunks.value === 0

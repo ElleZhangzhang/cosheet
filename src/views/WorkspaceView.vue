@@ -1,11 +1,19 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { ApiError } from "@/api/http";
 import AppSidebar from "@/components/AppSidebar.vue";
 import FileUploadDialog from "@/components/FileUploadDialog.vue";
+import UnfinishedUploads from "@/components/UnfinishedUploads.vue";
 import { listFiles } from "@/services/files";
+import { cancelVersion } from "@/services/versions";
 import { useWorkspaceStore } from "@/stores/workspace";
 import type { FileSummary, WorkspaceRole } from "@/types/api";
+import type { UploadTaskMeta } from "@/types/uploadTask";
+import {
+  loadUploadTaskMetas,
+  removeUploadTask,
+} from "@/utils/uploadTaskStorage";
 
 const route = useRoute();
 const router = useRouter();
@@ -29,6 +37,10 @@ const filesLoading = ref(false);
 const filesError = ref("");
 const searchQuery = ref("");
 const uploadOpen = ref(false);
+const unfinishedTasks = ref<UploadTaskMeta[]>([]);
+const resumeTask = ref<UploadTaskMeta | null>(null);
+const abandoningId = ref<string | null>(null);
+const taskError = ref("");
 
 let filesRequestId = 0;
 let searchTimer: number | undefined;
@@ -71,6 +83,8 @@ async function loadFiles(): Promise<void> {
 
 async function handleUploaded(): Promise<void> {
   uploadOpen.value = false;
+  resumeTask.value = null;
+  loadUnfinishedTasks();
 
   if (searchQuery.value !== "") {
     // 避免：searchQuery="" → 触发watch searchQuery → 两次loadFiles
@@ -84,8 +98,85 @@ async function handleUploaded(): Promise<void> {
 
 async function handleUploadCancelled(): Promise<void> {
   uploadOpen.value = false;
+  resumeTask.value = null;
+  loadUnfinishedTasks();
   await loadFiles();
 }
+
+function loadUnfinishedTasks(): void {
+  const workspaceId = workspaceStore.currentWorkspaceId;
+
+  if (!workspaceId) {
+    unfinishedTasks.value = [];
+    return;
+  }
+
+  unfinishedTasks.value = loadUploadTaskMetas().filter(
+    (task) => task.workspaceId === workspaceId
+  );
+}
+
+function openNewUpload(): void {
+  taskError.value = "";
+  resumeTask.value = null;
+  uploadOpen.value = true;
+}
+
+function handleResume(task: UploadTaskMeta): void {
+  taskError.value = "";
+  resumeTask.value = task;
+  uploadOpen.value = true;
+}
+
+async function handleAbandon(task: UploadTaskMeta): Promise<void> {
+  if (abandoningId.value) {
+    return;
+  }
+
+  abandoningId.value = task.versionId;
+  taskError.value = "";
+
+  try {
+    try {
+      await cancelVersion(task.versionId);
+    } catch (err) {
+      // 版本已经不存在或已经完成，也允许清理本地任务
+      if (
+        !(
+          err instanceof ApiError &&
+          (err.status === 404 || err.status === 409)
+        )
+      ) {
+        throw err;
+      }
+    }
+
+    await removeUploadTask(task.versionId);
+
+    if (resumeTask.value?.versionId === task.versionId) {
+      resumeTask.value = null;
+      uploadOpen.value = false;
+    }
+
+    await loadFiles();
+  } catch (err) {
+    taskError.value =
+      err instanceof Error ? err.message : "放弃上传失败";
+  } finally {
+    loadUnfinishedTasks();
+    abandoningId.value = null;
+  }
+}
+
+watch(uploadOpen, (open) => {
+  if (open) {
+    return;
+  }
+
+  resumeTask.value = null;
+  loadUnfinishedTasks();
+  void loadFiles();
+});
 
 function formatTime(value: string): string {
   const date = new Date(value);
@@ -108,6 +199,10 @@ watch(
       skipNextSearch = true;
       searchQuery.value = "";
     }
+
+    resumeTask.value = null;
+    taskError.value = "";
+    loadUnfinishedTasks();
 
     if (workspaceId) {
       void loadFiles();
@@ -226,11 +321,20 @@ watch(
               type="search"
               placeholder="搜索文件名"
             />
-            <button type="button" class="upload-btn" @click="uploadOpen = true">
+            <button type="button" class="upload-btn" @click="openNewUpload">
               上传文件
             </button>
           </div>
         </header>
+
+        <UnfinishedUploads
+          :tasks="unfinishedTasks"
+          :abandoning-id="abandoningId"
+          @resume="handleResume"
+          @abandon="handleAbandon"
+        />
+
+        <p v-if="taskError" class="task-error">{{ taskError }}</p>
 
         <section class="workspace-content">
           <div class="content-heading">
@@ -250,7 +354,7 @@ watch(
           <div v-else-if="files.length === 0" class="empty-card">
             <h3>还没有文件</h3>
             <p>上传 Excel 或 CSV 文件开始使用。</p>
-            <button type="button" class="upload-btn" @click="uploadOpen = true">
+            <button type="button" class="upload-btn" @click="openNewUpload">
               上传文件
             </button>
           </div>
@@ -296,6 +400,7 @@ watch(
       v-if="currentWorkspace"
       v-model:open="uploadOpen"
       :workspace-id="currentWorkspace.id"
+      :resume-task="resumeTask"
       @created="handleUploaded"
       @cancelled="handleUploadCancelled"
     />
@@ -423,6 +528,16 @@ watch(
 .upload-btn:hover {
   transform: translateY(-1px);
   box-shadow: 0 8px 20px rgba(191, 161, 117, 0.25);
+}
+
+.task-error {
+  margin: 12px 0 0;
+  padding: 10px 14px;
+  border: 1px solid rgba(245, 108, 108, 0.25);
+  border-radius: 8px;
+  background: #fef0f0;
+  color: #f56c6c;
+  font-size: 13px;
 }
 
 .workspace-content {
