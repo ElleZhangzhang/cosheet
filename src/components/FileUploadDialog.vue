@@ -6,15 +6,30 @@ import { createFile } from "@/services/files";
 import {
   cancelVersion,
   completeVersion,
+  getVersionChunks,
   uploadChunk,
 } from "@/services/versions";
 import type { ParsedSheet } from "@/types";
+import type { UploadTaskMeta } from "@/types/uploadTask";
 import {
+  ROWS_PER_CHUNK,
+  computeMissingChunks,
+  isCompatibleSheet,
+  isSameStoredFile,
+} from "@/utils/uploadResume";
+import {
+  getUploadTaskFile,
   removeUploadTask,
   saveUploadTask,
 } from "@/utils/uploadTaskStorage";
 
-type Phase = "idle" | "creating" | "uploading" | "completing" | "cancelling";
+type Phase =
+  | "idle"
+  | "resuming"
+  | "creating"
+  | "uploading"
+  | "completing"
+  | "cancelling";
 
 type ChunkUploadResult =
   | { ok: true }
@@ -31,6 +46,7 @@ const MAX_ATTEMPTS = 3;
 const props = defineProps<{
   open: boolean;
   workspaceId: string;
+  resumeTask?: UploadTaskMeta | null;
 }>();
 
 const emit = defineEmits<{
@@ -86,6 +102,9 @@ const primaryDisabled = computed(() => {
 
 // #region 状态机的按钮文字
 const primaryLabel = computed(() => {
+  if (phase.value === "resuming") {
+    return "恢复中...";
+  }
   if (phase.value === "creating") {
     return "创建中...";
   }
@@ -112,6 +131,9 @@ const primaryLabel = computed(() => {
 });
 
 const cancelLabel = computed(() => {
+  if (phase.value === "resuming") {
+    return "准备中...";
+  }
   if (phase.value === "cancelling") {
     return "取消中...";
   }
@@ -129,11 +151,16 @@ const cancelLabel = computed(() => {
 });
 
 const cancelDisabled = computed(
-  () => phase.value === "completing" || phase.value === "cancelling"
+  () =>
+    phase.value === "resuming" ||
+    phase.value === "completing" ||
+    phase.value === "cancelling"
 );
 
 const phaseText = computed(() => {
   switch (phase.value) {
+    case "resuming":
+      return "正在读取本地文件和服务器分片状态...";
     case "creating":
       return "正在创建文件和版本...";
     case "uploading":
@@ -260,9 +287,7 @@ async function handleFileChange(event: Event): Promise<void> {
 // LIGHT
 // 1. 单块上传 + 重试机制
 // 2. return boolean
-async function uploadChunkWithRetry(
-  index: number
-): Promise<ChunkUploadResult> {
+async function uploadChunkWithRetry(index: number): Promise<ChunkUploadResult> {
   const parsed = sheet.value;
   const currentVersionId = versionId.value;
 
@@ -274,8 +299,8 @@ async function uploadChunkWithRetry(
     };
   }
 
-  const start = index * 500;
-  const rows = parsed.rows.slice(start, start + 500);
+  const start = index * ROWS_PER_CHUNK;
+  const rows = parsed.rows.slice(start, start + ROWS_PER_CHUNK);
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     if (cancelRequested.value) {
@@ -432,6 +457,76 @@ async function uploadChunks(indices: number[]): Promise<void> {
   await finishVersion();
 }
 
+async function startResume(task: UploadTaskMeta): Promise<void> {
+  phase.value = "resuming";
+  error.value = "";
+  fatalError.value = false;
+  failedChunks.value = [];
+  completedChunks.value = 0;
+  totalChunks.value = 0;
+  cancelRequested.value = false;
+
+  try {
+    // 读IndexedDB
+    const file = await getUploadTaskFile(task.versionId);
+
+    //#region  一堆校验
+    if (!file) {
+      throw new Error("原文件已丢失，请重新选择文件");
+    }
+    if (!isSameStoredFile(file, task)) {
+      throw new Error("保存的文件与任务不一致，请重新选择文件");
+    }
+
+    sourceFile.value = file;
+    const parsed = await parseFile(file);
+    if (!isCompatibleSheet(parsed, task.rowCount)) {
+      throw new Error("文件行数与任务不一致，请重新选择文件");
+    }
+    sheet.value = parsed;
+
+    // 读mysql
+    const server = await getVersionChunks(task.versionId);
+    if (
+      server.rowCount !== task.rowCount ||
+      server.chunkCount !== task.chunkCount
+    ) {
+      throw new Error("服务端版本信息与任务不一致");
+    }
+    //#endregion
+
+    versionId.value = server.versionId;
+    totalChunks.value = server.chunkCount;
+
+    const missing = computeMissingChunks(
+      server.rowCount,
+      server.chunkCount,
+      server.chunks
+    );
+    completedChunks.value = server.chunkCount - missing.length;
+
+    if (missing.length === 0) {
+      await finishVersion();
+      return;
+    }
+
+    await uploadChunks(missing);
+  } catch (err) {
+    // 版本已被删除或已完成，任务没有继续保留的意义
+    if (err instanceof ApiError && (err.status === 404 || err.status === 409)) {
+      await removeUploadTask(task.versionId);
+    }
+
+    sheet.value = null;
+    sourceFile.value = null;
+    versionId.value = null;
+    totalChunks.value = 0;
+    completedChunks.value = 0;
+    phase.value = "idle";
+    error.value = `恢复失败：${err instanceof Error ? err.message : "请重试"}`;
+  }
+}
+
 async function startUpload(): Promise<void> {
   const parsed = sheet.value;
 
@@ -503,11 +598,7 @@ async function startUpload(): Promise<void> {
 }
 
 async function retryFailed(): Promise<void> {
-  if (
-    busy.value ||
-    fatalError.value ||
-    failedChunks.value.length === 0
-  ) {
+  if (busy.value || fatalError.value || failedChunks.value.length === 0) {
     return;
   }
 
@@ -545,12 +636,19 @@ function handlePrimary(): void {
 }
 
 watch(
-  () => props.open,
-  (open) => {
-    if (open) {
-      resetDialog();
+  [() => props.open, () => props.resumeTask],
+  ([open, resumeTask]) => {
+    if (!open) {
+      return;
     }
-  }
+
+    resetDialog();
+
+    if (resumeTask) {
+      void startResume(resumeTask);
+    }
+  },
+  { immediate: true }
 );
 </script>
 
