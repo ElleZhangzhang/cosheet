@@ -3,6 +3,7 @@ import type { DataRow } from "@/types";
 import type {
   CompleteVersionResponse,
   UploadChunkResponse,
+  VersionChunksResponse,
 } from "@/types/api";
 
 function uploadChunk(
@@ -39,4 +40,17 @@ function cancelVersion(versionId: string): Promise<null> {
   });
 }
 
-export { uploadChunk, completeVersion, cancelVersion };
+function getVersionChunks(
+  versionId: string
+): Promise<VersionChunksResponse> {
+  return request<VersionChunksResponse>(
+    `/versions/${versionId}/chunks`
+  );
+}
+
+export {
+  uploadChunk,
+  completeVersion,
+  cancelVersion,
+  getVersionChunks,
+};

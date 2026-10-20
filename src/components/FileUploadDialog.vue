@@ -9,6 +9,10 @@ import {
   uploadChunk,
 } from "@/services/versions";
 import type { ParsedSheet } from "@/types";
+import {
+  removeUploadTask,
+  saveUploadTask,
+} from "@/utils/uploadTaskStorage";
 
 type Phase = "idle" | "creating" | "uploading" | "completing" | "cancelling";
 
@@ -39,6 +43,7 @@ const { parseFile } = useFileParser();
 
 const fileInput = ref<HTMLInputElement>();
 const sheet = ref<ParsedSheet | null>(null);
+const sourceFile = ref<File | null>(null);
 const parsing = ref(false);
 const error = ref("");
 
@@ -116,6 +121,9 @@ const cancelLabel = computed(() => {
   if (phase.value === "creating" || phase.value === "uploading") {
     return "取消上传";
   }
+  if (versionId.value !== null) {
+    return "放弃上传";
+  }
 
   return "取消";
 });
@@ -157,6 +165,7 @@ function delay(ms: number): Promise<void> {
 // 文件上传完毕 → 重置相关值，等待下一个文件的上传
 function resetDialog(): void {
   sheet.value = null;
+  sourceFile.value = null;
   parsing.value = false;
   error.value = "";
   phase.value = "idle"; // 空闲的、待机的
@@ -169,12 +178,14 @@ function resetDialog(): void {
 }
 
 async function performCancel(): Promise<void> {
+  const currentVersionId = versionId.value;
   phase.value = "cancelling";
   error.value = "";
 
   try {
-    if (versionId.value) {
-      await cancelVersion(versionId.value);
+    if (currentVersionId) {
+      await cancelVersion(currentVersionId);
+      await removeUploadTask(currentVersionId);
     }
 
     emit("cancelled");
@@ -187,14 +198,9 @@ async function performCancel(): Promise<void> {
   }
 }
 
+// 右上角 × / 点击遮罩：关闭弹窗，但保留未完成的任务
 function closeDialog(): void {
   if (busy.value) {
-    return;
-  }
-
-  if (versionId.value) {
-    cancelRequested.value = true;
-    void performCancel();
     return;
   }
 
@@ -212,9 +218,15 @@ function handleCancel(): void {
 function handleCancelClick(): void {
   if (phase.value === "creating" || phase.value === "uploading") {
     handleCancel();
-  } else {
-    closeDialog();
+    return;
   }
+
+  if (versionId.value) {
+    void performCancel();
+    return;
+  }
+
+  closeDialog();
 }
 
 function triggerFileInput(): void {
@@ -231,6 +243,7 @@ async function handleFileChange(event: Event): Promise<void> {
     return;
   }
 
+  sourceFile.value = file;
   sheet.value = null;
   error.value = "";
   parsing.value = true;
@@ -369,6 +382,7 @@ async function finishVersion(): Promise<void> {
 
   try {
     await completeVersion(currentVersionId, parsed.rowCount, totalChunks.value);
+    await removeUploadTask(currentVersionId);
 
     emit("created");
     emit("update:open", false);
@@ -446,6 +460,28 @@ async function startUpload(): Promise<void> {
     if (cancelRequested.value) {
       await performCancel();
       return;
+    }
+
+    const file = sourceFile.value;
+    if (file) {
+      try {
+        await saveUploadTask(
+          {
+            versionId: created.version.id,
+            fileId: created.file.id,
+            workspaceId: props.workspaceId,
+            fileName: file.name,
+            fileSize: file.size,
+            lastModified: file.lastModified,
+            rowCount: parsed.rowCount,
+            chunkCount: created.version.chunkCount,
+            createdAt: Date.now(),
+          },
+          file
+        );
+      } catch {
+        // 持久化失败不阻塞上传
+      }
     }
 
     const indices = Array.from(

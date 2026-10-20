@@ -84,12 +84,28 @@ interface CreateFileResponse {
     chunkCount: number;
   };
 }
+//#endregion
 
+//#region chunk
 interface UploadChunkResponse {
   chunk: {
     index: number;
     rowCount: number;
   };
+}
+
+interface UploadedChunkInfo {
+  index: number;
+  rowCount: number;
+}
+
+interface VersionChunksResponse {
+  versionId: string;
+  fileId: string;
+  status: FileVersionStatus;
+  rowCount: number;
+  chunkCount: number;
+  chunks: UploadedChunkInfo[];
 }
 
 interface CompleteVersionResponse {
@@ -126,6 +142,8 @@ export type {
   FilesResponse,
   CreateFileResponse,
   UploadChunkResponse,
+  UploadedChunkInfo,
+  VersionChunksResponse,
   CompleteVersionResponse,
   RegisterInput,
   LoginInput,
