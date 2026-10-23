@@ -1,6 +1,10 @@
 import { request } from "@/api/http";
 import type { ColumnDef } from "@/types";
-import type { CreateFileResponse, FilesResponse } from "@/types/api";
+import type {
+  CreateFileResponse,
+  FileDetailResponse,
+  FilesResponse,
+} from "@/types/api";
 
 interface CreateFileInput {
   name: string;
@@ -36,4 +40,8 @@ function createFile(
   );
 }
 
-export { listFiles, createFile };
+function getFileDetail(fileId: string): Promise<FileDetailResponse> {
+  return request<FileDetailResponse>(`/files/${fileId}`);
+}
+
+export { listFiles, createFile, getFileDetail };

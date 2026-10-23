@@ -128,6 +128,14 @@ function handleResume(task: UploadTaskMeta): void {
   uploadOpen.value = true;
 }
 
+function openFile(file: FileSummary): void {
+  if (file.version?.status !== "ready") {
+    return;
+  }
+
+  router.push(`/files/${file.id}`);
+}
+
 async function handleAbandon(task: UploadTaskMeta): Promise<void> {
   if (abandoningId.value) {
     return;
@@ -360,7 +368,18 @@ watch(
           </div>
 
           <div v-else class="file-list">
-            <article v-for="file in files" :key="file.id" class="file-row">
+            <article
+              v-for="file in files"
+              :key="file.id"
+              class="file-row"
+              :class="{
+                clickable: file.version?.status === 'ready',
+              }"
+              :role="file.version?.status === 'ready' ? 'button' : undefined"
+              :tabindex="file.version?.status === 'ready' ? 0 : undefined"
+              @click="openFile(file)"
+              @keydown.enter="openFile(file)"
+            >
               <div class="file-icon">▤</div>
 
               <div class="file-main">
@@ -605,6 +624,10 @@ watch(
 
 .file-row:hover {
   background: rgba(191, 161, 117, 0.03);
+}
+
+.file-row.clickable {
+  cursor: pointer;
 }
 
 .file-icon {

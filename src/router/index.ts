@@ -29,6 +29,12 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      path: "/files/:fileId",
+      name: "file",
+      component: () => import("@/views/FileView.vue"),
+      meta: { requiresAuth: true },
+    },
+    {
       path: "/",
       redirect: "/workspaces",
     },

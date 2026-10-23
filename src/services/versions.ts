@@ -4,6 +4,8 @@ import type {
   CompleteVersionResponse,
   UploadChunkResponse,
   VersionChunksResponse,
+  VersionRowsQuery,
+  VersionRowsResponse,
 } from "@/types/api";
 
 function uploadChunk(
@@ -48,9 +50,39 @@ function getVersionChunks(
   );
 }
 
+function getVersionRows(
+  versionId: string,
+  query: VersionRowsQuery = {}
+): Promise<VersionRowsResponse> {
+  const params = new URLSearchParams();
+
+  if (query.offset !== undefined) {
+    params.set("offset", String(query.offset));
+  }
+  if (query.limit !== undefined) {
+    params.set("limit", String(query.limit));
+  }
+  if (query.q) {
+    params.set("q", query.q);
+  }
+  if (query.sortBy) {
+    params.set("sortBy", query.sortBy);
+  }
+  if (query.sortDir) {
+    params.set("sortDir", query.sortDir);
+  }
+
+  const suffix = params.toString();
+
+  return request<VersionRowsResponse>(
+    `/versions/${versionId}/rows${suffix ? `?${suffix}` : ""}`
+  );
+}
+
 export {
   uploadChunk,
   completeVersion,
   cancelVersion,
   getVersionChunks,
+  getVersionRows,
 };

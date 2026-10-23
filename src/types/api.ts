@@ -1,3 +1,5 @@
+import type { ColumnDef } from "@/types";
+
 //#region auth
 interface User {
   id: string;
@@ -84,6 +86,56 @@ interface CreateFileResponse {
     chunkCount: number;
   };
 }
+
+// 文件版本详情
+interface FileVersionDetail {
+  id: string;
+  versionNumber: number;
+  status: FileVersionStatus;
+  columns: ColumnDef[];
+  rowCount: number;
+  chunkCount: number;
+  createdAt: string;
+}
+
+interface FileDetailResponse {
+  file: {
+    id: string;
+    workspaceId: string;
+    name: string;
+    latestVersionNumber: number;
+    createdAt: string;
+    updatedAt: string;
+  };
+  latestVersion: FileVersionDetail | null;
+  versions: FileVersionDetail[];
+}
+
+interface VersionRow {
+  id?: string;
+  rowIndex: number;
+
+  // 除了明确规定的id和rowIndex之外，这个接口还可以包含任意数量的其他属性（因为不同文件的column是不一样的）
+  // 这些属性的key必须是字符串，value可以是任意类型
+  [key: string]: unknown;
+}
+
+// rows查询
+interface VersionRowsQuery {
+  offset?: number;
+  limit?: number;
+  q?: string;
+  sortBy?: string;
+  sortDir?: "asc" | "desc";
+}
+
+// rows查询的返回
+interface VersionRowsResponse {
+  rows: VersionRow[];
+  total: number;
+  offset: number;
+  limit: number;
+}
 //#endregion
 
 //#region chunk
@@ -141,6 +193,11 @@ export type {
   FileSummary,
   FilesResponse,
   CreateFileResponse,
+  FileVersionDetail,
+  FileDetailResponse,
+  VersionRow,
+  VersionRowsQuery,
+  VersionRowsResponse,
   UploadChunkResponse,
   UploadedChunkInfo,
   VersionChunksResponse,

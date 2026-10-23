@@ -206,6 +206,7 @@ interface VersionSummary {
 interface FileDetail {
   file: {
     id: string;
+    workspaceId: string;
     name: string;
     latestVersionNumber: number;
     createdAt: Date;
@@ -290,6 +291,7 @@ export async function getFileDetail(
   return {
     file: {
       id: file.id,
+      workspaceId: file.workspace_id,
       name: file.name,
       latestVersionNumber: file.latest_version_number,
       createdAt: file.created_at,
