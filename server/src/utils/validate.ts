@@ -22,6 +22,17 @@ interface CreateWorkspaceInput {
   name: string;
 }
 
+type MemberRole = "editor" | "commenter" | "viewer";
+
+interface AddMemberInput {
+  email: string;
+  role: MemberRole;
+}
+
+interface UpdateMemberRoleInput {
+  role: MemberRole;
+}
+
 //#region  file
 interface FileColumnInput {
   keyName: string;
@@ -383,6 +394,37 @@ export function validateRowsQuery(
 }
 //#endregion
 
+//#region 5.member相关校验
+function validateMemberRole(value: unknown): MemberRole {
+  if (value !== "editor" && value !== "commenter" && value !== "viewer") {
+    throw new HttpError(400, "role 只能是 editor、commenter 或 viewer");
+  }
+
+  return value;
+}
+
+// 添加member
+export function validateAddMemberInput(body: unknown): AddMemberInput {
+  const data = asObject(body);
+
+  return {
+    email: validateEmail(data.email),
+    role: validateMemberRole(data.role),
+  };
+}
+
+// 更新已有member的role
+export function validateUpdateMemberRoleInput(
+  body: unknown
+): UpdateMemberRoleInput {
+  const data = asObject(body);
+
+  return {
+    role: validateMemberRole(data.role),
+  };
+}
+//#endregion
+
 export type {
   FileColumnInput,
   CreateFileInput,
@@ -391,4 +433,7 @@ export type {
   CompleteInput,
   SortDir,
   RowsQuery,
+  MemberRole,
+  AddMemberInput,
+  UpdateMemberRoleInput,
 };

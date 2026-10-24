@@ -5,6 +5,7 @@ import { errorHandler, notFoundHandler } from "./middleware/error";
 import { authRouter } from "./routes/auth";
 import { fileDetailRouter } from "./routes/fileDetail";
 import { filesRouter } from "./routes/files";
+import { membersRouter } from "./routes/members";
 import { versionsRouter } from "./routes/versions";
 import { workspacesRouter } from "./routes/workspaces";
 
@@ -20,6 +21,11 @@ export function createApp() {
   });
 
   app.use("/api/auth", authRouter);
+  app.use(
+    "/api/workspaces/:workspaceId/members",
+    authRequired,
+    membersRouter
+  );
   app.use(
     "/api/workspaces/:workspaceId/files",
     authRequired,
