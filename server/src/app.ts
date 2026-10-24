@@ -3,6 +3,10 @@ import express from "express";
 import { authRequired } from "./middleware/auth";
 import { errorHandler, notFoundHandler } from "./middleware/error";
 import { authRouter } from "./routes/auth";
+import {
+  commentsRouter,
+  fileCommentsRouter,
+} from "./routes/comments";
 import { fileDetailRouter } from "./routes/fileDetail";
 import { filesRouter } from "./routes/files";
 import { membersRouter } from "./routes/members";
@@ -31,6 +35,12 @@ export function createApp() {
     authRequired,
     filesRouter
   );
+  app.use(
+    "/api/files/:fileId/comments",
+    authRequired,
+    fileCommentsRouter
+  );
+  app.use("/api/comments", authRequired, commentsRouter);
   app.use("/api/files", authRequired, fileDetailRouter);
   app.use("/api/versions", authRequired, versionsRouter);
   app.use("/api/workspaces", authRequired, workspacesRouter);

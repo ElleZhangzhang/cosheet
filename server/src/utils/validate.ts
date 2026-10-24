@@ -33,6 +33,17 @@ interface UpdateMemberRoleInput {
   role: MemberRole;
 }
 
+interface CreateCommentInput {
+  versionId: string;
+  rowIndex: number;
+  columnKey: string | null;
+  content: string;
+}
+
+interface UpdateCommentInput {
+  resolved: boolean;
+}
+
 //#region  file
 interface FileColumnInput {
   keyName: string;
@@ -425,6 +436,96 @@ export function validateUpdateMemberRoleInput(
 }
 //#endregion
 
+//#region 6.comment相关校验
+function validateCommentVersionId(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new HttpError(400, "versionId 不能为空");
+  }
+
+  return value.trim();
+}
+
+function validateCommentContent(value: unknown): string {
+  if (typeof value !== "string") {
+    throw new HttpError(400, "评论内容不能为空");
+  }
+
+  const content = value.trim();
+  if (!content) {
+    throw new HttpError(400, "评论内容不能为空");
+  }
+  if (content.length > 5000) {
+    throw new HttpError(400, "评论内容不能超过 5000 个字符");
+  }
+
+  return content;
+}
+
+function validateCommentRowIndex(value: unknown): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    value < 0
+  ) {
+    throw new HttpError(400, "rowIndex 必须是非负整数");
+  }
+
+  return value;
+}
+
+function validateCommentColumnKey(value: unknown): string | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== "string") {
+    throw new HttpError(400, "columnKey 必须是字符串");
+  }
+
+  const columnKey = value.trim();
+  if (!columnKey) {
+    return null;
+  }
+  if (columnKey.length > 255) {
+    throw new HttpError(400, "columnKey 不能超过 255 个字符");
+  }
+
+  return columnKey;
+}
+
+export function validateCreateCommentInput(
+  body: unknown
+): CreateCommentInput {
+  const data = asObject(body);
+
+  return {
+    versionId: validateCommentVersionId(data.versionId),
+    rowIndex: validateCommentRowIndex(data.rowIndex),
+    columnKey: validateCommentColumnKey(data.columnKey),
+    content: validateCommentContent(data.content),
+  };
+}
+
+export function validateUpdateCommentInput(
+  body: unknown
+): UpdateCommentInput {
+  const data = asObject(body);
+
+  if (typeof data.resolved !== "boolean") {
+    throw new HttpError(400, "resolved 必须是布尔值");
+  }
+
+  return { resolved: data.resolved };
+}
+
+export function validateCommentListQuery(
+  query: Record<string, unknown>
+): { versionId: string } {
+  return {
+    versionId: validateCommentVersionId(query.versionId),
+  };
+}
+//#endregion
+
 export type {
   FileColumnInput,
   CreateFileInput,
@@ -436,4 +537,6 @@ export type {
   MemberRole,
   AddMemberInput,
   UpdateMemberRoleInput,
+  CreateCommentInput,
+  UpdateCommentInput,
 };
