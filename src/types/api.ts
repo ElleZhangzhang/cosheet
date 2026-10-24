@@ -46,6 +46,33 @@ interface WorkspacesResponse {
 interface CreateWorkspaceResponse {
   workspace: Workspace;
 }
+
+type MemberRole = "editor" | "commenter" | "viewer";
+
+interface WorkspaceMember {
+  userId: string;
+  email: string;
+  name: string;
+  role: WorkspaceRole;
+  joinedAt: string;
+}
+
+interface MembersResponse {
+  members: WorkspaceMember[];
+}
+
+interface AddMemberInput {
+  email: string;
+  role: MemberRole;
+}
+
+interface UpdateMemberRoleInput {
+  role: MemberRole;
+}
+
+interface MemberResponse {
+  member: WorkspaceMember;
+}
 //#endregion
 
 //#region file
@@ -197,6 +224,12 @@ export type {
   Workspace,
   WorkspacesResponse,
   CreateWorkspaceResponse,
+  MemberRole,
+  WorkspaceMember,
+  MembersResponse,
+  AddMemberInput,
+  UpdateMemberRoleInput,
+  MemberResponse,
   FileVersionStatus,
   FileVersionSummary,
   FileSummary,

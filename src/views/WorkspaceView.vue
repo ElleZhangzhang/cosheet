@@ -4,6 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import { ApiError } from "@/api/http";
 import AppSidebar from "@/components/AppSidebar.vue";
 import FileUploadDialog from "@/components/FileUploadDialog.vue";
+import MembersDialog from "@/components/MembersDialog.vue";
 import UnfinishedUploads from "@/components/UnfinishedUploads.vue";
 import { listFiles } from "@/services/files";
 import { cancelVersion } from "@/services/versions";
@@ -21,6 +22,15 @@ const workspaceStore = useWorkspaceStore();
 
 const currentWorkspace = computed(() => workspaceStore.currentWorkspace);
 
+const canManageMembers = computed(
+  () => currentWorkspace.value?.role === "owner"
+);
+
+const canUploadFiles = computed(() => {
+  const role = currentWorkspace.value?.role;
+  return role === "owner" || role === "editor";
+});
+
 const roleLabels: Record<WorkspaceRole, string> = {
   owner: "所有者",
   editor: "编辑者",
@@ -37,6 +47,7 @@ const filesLoading = ref(false);
 const filesError = ref("");
 const searchQuery = ref("");
 const uploadOpen = ref(false);
+const membersOpen = ref(false);
 const unfinishedTasks = ref<UploadTaskMeta[]>([]);
 const resumeTask = ref<UploadTaskMeta | null>(null);
 const abandoningId = ref<string | null>(null);
@@ -329,13 +340,26 @@ watch(
               type="search"
               placeholder="搜索文件名"
             />
-            <button type="button" class="upload-btn" @click="openNewUpload">
+            <button
+              type="button"
+              class="members-btn"
+              @click="membersOpen = true"
+            >
+              成员
+            </button>
+            <button
+              v-if="canUploadFiles"
+              type="button"
+              class="upload-btn"
+              @click="openNewUpload"
+            >
               上传文件
             </button>
           </div>
         </header>
 
         <UnfinishedUploads
+          v-if="canUploadFiles"
           :tasks="unfinishedTasks"
           :abandoning-id="abandoningId"
           @resume="handleResume"
@@ -361,8 +385,16 @@ watch(
 
           <div v-else-if="files.length === 0" class="empty-card">
             <h3>还没有文件</h3>
-            <p>上传 Excel 或 CSV 文件开始使用。</p>
-            <button type="button" class="upload-btn" @click="openNewUpload">
+            <p v-if="canUploadFiles">
+              上传 Excel 或 CSV 文件开始使用。
+            </p>
+            <p v-else>当前角色只能查看文件。</p>
+            <button
+              v-if="canUploadFiles"
+              type="button"
+              class="upload-btn"
+              @click="openNewUpload"
+            >
               上传文件
             </button>
           </div>
@@ -422,6 +454,13 @@ watch(
       :resume-task="resumeTask"
       @created="handleUploaded"
       @cancelled="handleUploadCancelled"
+    />
+
+    <MembersDialog
+      v-if="currentWorkspace"
+      v-model:open="membersOpen"
+      :workspace-id="currentWorkspace.id"
+      :can-manage="canManageMembers"
     />
     <!-- created何时触发？子组件emit时 -->
   </div>
@@ -530,6 +569,20 @@ watch(
 .search-input:focus {
   border-color: #bfa175;
   box-shadow: 0 0 0 3px rgba(191, 161, 117, 0.12);
+}
+
+.members-btn {
+  padding: 9px 14px;
+  border: 1px solid rgba(191, 161, 117, 0.3);
+  border-radius: 8px;
+  background: transparent;
+  color: #8a7355;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.members-btn:hover {
+  background: rgba(191, 161, 117, 0.08);
 }
 
 .upload-btn {
