@@ -4,6 +4,7 @@ import { HttpError } from "./httpError";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+//#region auth
 interface RegisterInput {
   email: string;
   password: string;
@@ -14,11 +15,14 @@ interface LoginInput {
   email: string;
   password: string;
 }
+//#endregion
 
+// workspace
 interface CreateWorkspaceInput {
   name: string;
 }
 
+//#region  file
 interface FileColumnInput {
   keyName: string;
   label: string;
@@ -28,6 +32,12 @@ interface FileColumnInput {
 
 interface CreateFileInput {
   name: string;
+  columns: FileColumnInput[];
+  rowCount: number;
+}
+//#endregion
+
+interface CreateVersionInput {
   columns: FileColumnInput[];
   rowCount: number;
 }
@@ -234,6 +244,26 @@ export function validateCreateFileInput(body: unknown): CreateFileInput {
     rowCount: validateRowCount(data.rowCount),
   };
 }
+
+// 初步校验创建新版本时的请求体
+export function validateCreateVersionInput(
+  body: unknown
+): CreateVersionInput {
+  const data = asObject(body);
+
+  if (!Array.isArray(data.columns) || data.columns.length === 0) {
+    throw new HttpError(400, "columns 不能为空");
+  }
+
+  const columns = data.columns.map((column, index) =>
+    validateColumnInput(column, index)
+  );
+
+  return {
+    columns,
+    rowCount: validateRowCount(data.rowCount),
+  };
+}
 //#endregion
 
 //#region 4.version相关校验
@@ -356,6 +386,7 @@ export function validateRowsQuery(
 export type {
   FileColumnInput,
   CreateFileInput,
+  CreateVersionInput,
   ChunkInput,
   CompleteInput,
   SortDir,

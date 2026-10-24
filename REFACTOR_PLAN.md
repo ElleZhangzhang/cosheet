@@ -945,6 +945,8 @@ complete 时服务端校验：
 
 ## 17. 报告快照节点
 
+> **v1 决策（2026-10-24）：采用方案 A。** 报告内插入普通 TipTap 表格作为数据快照，不实现自定义 Extension；以下 `TableSnapshotExtension` + NodeView + 刷新快照设计延后到项目收尾后，作为可选增强。
+
 实现 `TableSnapshotExtension`，参考现有 `ChartEmbedExtension` 的写法：
 
 ```ts
@@ -1262,7 +1264,7 @@ mysql -u root -p < server/sql/schema.sql
 ### Phase 3：报告与版本
 
 1. 报告列表/创建/编辑/删除；TipTap 保存到服务端。
-2. `tableSnapshot` 节点 + 插入弹窗 + 刷新快照。
+2. 报告内插入普通 TipTap 表格快照（方案 A）；`tableSnapshot` 自定义节点、NodeView、刷新快照暂缓（见第 17 节）。
 3. PDF 导出改造。
 4. 版本上传（新版本）+ 版本切换；diff 可放到 Phase 4。
 5. 文档、测试、边界处理。

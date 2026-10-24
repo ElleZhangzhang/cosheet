@@ -4,8 +4,13 @@ import { randomUUID } from "node:crypto";
 import type { RowDataPacket } from "mysql2";
 import { pool } from "../db/pool";
 import { HttpError } from "../utils/httpError";
-import type { CreateFileInput, FileColumnInput } from "../utils/validate";
+import type {
+  CreateFileInput,
+  CreateVersionInput,
+  FileColumnInput,
+} from "../utils/validate";
 import { assertWorkspaceAccess } from "./permissions";
+import type { WorkspaceRole } from "./permissions";
 
 interface CreatedFileVersion {
   file: {
@@ -113,6 +118,112 @@ export async function createFileWithVersion(
     version: {
       id: versionId,
       versionNumber: 1,
+      status: "uploading",
+      chunkCount,
+    },
+  };
+}
+
+interface CreatedVersion {
+  version: {
+    id: string;
+    versionNumber: number;
+    status: "uploading";
+    chunkCount: number;
+  };
+}
+
+interface FileLockRow extends RowDataPacket {
+  id: string;
+}
+
+interface UploadingVersionRow extends RowDataPacket {
+  id: string;
+}
+
+interface MaxVersionRow extends RowDataPacket {
+  max_version: number;
+}
+
+// 为已有文件创建新版本（uploading）
+export async function createFileVersion(
+  userId: string,
+  fileId: string,
+  input: CreateVersionInput
+): Promise<CreatedVersion> {
+  await getAccessibleFile(userId, fileId, ["owner", "editor"]);
+
+  const versionId = randomUUID();
+  const chunkCount = getChunkCount(input.rowCount);
+  const connection = await pool.getConnection();
+  let versionNumber = 0;
+
+  try {
+    await connection.beginTransaction();
+
+    // LIGHT for update锁住文件行，避免并发创建多个版本
+    const [fileRows] = await connection.execute<FileLockRow[]>(
+      "SELECT id FROM files WHERE id = ? AND deleted_at IS NULL FOR UPDATE",
+      [fileId]
+    );
+    if (fileRows.length === 0) {
+      throw new HttpError(404, "文件不存在");
+    }
+
+    const [uploadingRows] =
+      await connection.execute<UploadingVersionRow[]>(
+        `SELECT id FROM file_versions
+         WHERE file_id = ? AND status = 'uploading'
+         LIMIT 1`,
+        [fileId]
+      );
+    if (uploadingRows.length > 0) {
+      throw new HttpError(409, "已有未完成的上传版本");
+    }
+
+    // 查出当前文件的最大版本号，比如为3，那么接下来创建的版本号就是4
+    const [maxRows] = await connection.execute<MaxVersionRow[]>(
+      `SELECT COALESCE(MAX(version_number), 0) AS max_version
+       FROM file_versions
+       WHERE file_id = ?`,
+      [fileId]
+    );
+    const maxVersion = maxRows[0]?.max_version ?? 0;
+    versionNumber = maxVersion + 1;
+
+    await connection.execute(
+      `INSERT INTO file_versions
+       (id, file_id, version_number, columns_json, row_count,
+        chunk_count, status, created_by_id)
+       VALUES (?, ?, ?, ?, ?, ?, 'uploading', ?)`,
+      [
+        versionId,
+        fileId,
+        versionNumber,
+        JSON.stringify(input.columns),
+        input.rowCount,
+        chunkCount,
+        userId,
+      ]
+    );
+
+    await connection.commit();
+  } catch (error) {
+    try {
+      await connection.rollback();
+    } catch {
+      // 忽略回滚失败，保留原始错误
+    }
+
+    throw error;
+  } finally {
+    connection.release();
+  }
+
+  return {
+    version: {
+      id: versionId,
+      versionNumber,
       status: "uploading",
       chunkCount,
     },
@@ -230,7 +341,8 @@ function parseColumns(value: unknown): FileColumnInput[] {
 // 查询未删除的文件，并校验当前用户的工作空间权限
 async function getAccessibleFile(
   userId: string,
-  fileId: string
+  fileId: string,
+  allowedRoles?: WorkspaceRole[]
 ): Promise<FileRow> {
   const [rows] = await pool.execute<FileRow[]>(
     `SELECT id, workspace_id, name, latest_version_number,
@@ -246,7 +358,11 @@ async function getAccessibleFile(
     throw new HttpError(404, "文件不存在");
   }
 
-  await assertWorkspaceAccess(userId, file.workspace_id);
+  await assertWorkspaceAccess(
+    userId,
+    file.workspace_id,
+    allowedRoles
+  );
 
   return file;
 }

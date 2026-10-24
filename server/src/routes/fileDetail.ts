@@ -1,7 +1,12 @@
 import { Router } from "express";
 import { asyncHandler } from "../middleware/asyncHandler";
-import { getFileDetail, listFileVersions } from "../services/files";
+import {
+  createFileVersion,
+  getFileDetail,
+  listFileVersions,
+} from "../services/files";
 import { HttpError } from "../utils/httpError";
+import { validateCreateVersionInput } from "../utils/validate";
 
 export const fileDetailRouter = Router();
 
@@ -20,6 +25,22 @@ function getFileId(fileId: string | string[] | undefined): string {
 
   return fileId;
 }
+
+// POST /api/files/:fileId/versions
+fileDetailRouter.post(
+  "/:fileId/versions",
+  asyncHandler(async (req, res) => {
+    const input = validateCreateVersionInput(req.body);
+
+    const result = await createFileVersion(
+      getUserId(req.userId),
+      getFileId(req.params.fileId),
+      input
+    );
+
+    res.status(201).json(result);
+  })
+);
 
 // GET /api/files/:fileId/versions
 // git log
