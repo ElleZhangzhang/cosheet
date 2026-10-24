@@ -1,27 +1,26 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import AppSidebar from "@/components/AppSidebar.vue";
+import RemoteVirtualTable from "@/components/DataTable/RemoteVirtualTable.vue";
 import { getFileDetail } from "@/services/files";
-import { getVersionRows } from "@/services/versions";
 import { useWorkspaceStore } from "@/stores/workspace";
-import type {
-  FileDetailResponse,
-  FileVersionDetail,
-  VersionRow,
-} from "@/types/api";
+import type { FileDetailResponse } from "@/types/api";
 
 const route = useRoute();
 const router = useRouter();
 const workspaceStore = useWorkspaceStore();
 
 const detail = ref<FileDetailResponse | null>(null);
-const rows = ref<VersionRow[]>([]);
-const total = ref(0);
 const detailLoading = ref(false);
-const rowsLoading = ref(false);
 const detailError = ref("");
-const rowsError = ref("");
+
+const searchInput = ref("");
+const appliedQuery = ref("");
+const sortBy = ref<string | null>(null);
+const sortDir = ref<"asc" | "desc">("asc");
+
+let searchTimer: number | undefined;
 
 const latestVersion = computed(() => detail.value?.latestVersion ?? null);
 const columns = computed(() => latestVersion.value?.columns ?? []);
@@ -31,24 +30,26 @@ const fileId = computed(() => {
   return typeof value === "string" ? value : "";
 });
 
-async function loadRows(version: FileVersionDetail): Promise<void> {
-  rowsLoading.value = true;
-  rowsError.value = "";
-
-  try {
-    const data = await getVersionRows(version.id, {
-      offset: 0,
-      limit: 200,
-    });
-
-    rows.value = data.rows;
-    total.value = data.total;
-  } catch (err) {
-    rowsError.value =
-      err instanceof Error ? err.message : "加载行数据失败";
-  } finally {
-    rowsLoading.value = false;
+const sortLabel = computed(() => {
+  if (!sortBy.value) {
+    return "";
   }
+
+  const column = columns.value.find((item) => item.keyName === sortBy.value);
+
+  return column?.label ?? sortBy.value;
+});
+
+function resetQuery(): void {
+  if (searchTimer !== undefined) {
+    window.clearTimeout(searchTimer);
+    searchTimer = undefined;
+  }
+
+  searchInput.value = "";
+  appliedQuery.value = "";
+  sortBy.value = null;
+  sortDir.value = "asc";
 }
 
 async function loadFile(): Promise<void> {
@@ -59,10 +60,8 @@ async function loadFile(): Promise<void> {
 
   detailLoading.value = true;
   detailError.value = "";
-  rowsError.value = "";
   detail.value = null;
-  rows.value = [];
-  total.value = 0;
+  resetQuery();
 
   try {
     const data = await getFileDetail(id);
@@ -70,28 +69,24 @@ async function loadFile(): Promise<void> {
 
     await workspaceStore.loadWorkspaces();
     workspaceStore.selectWorkspace(data.file.workspaceId);
-
-    if (data.latestVersion) {
-      await loadRows(data.latestVersion);
-    }
   } catch (err) {
-    detailError.value =
-      err instanceof Error ? err.message : "加载文件失败";
+    detailError.value = err instanceof Error ? err.message : "加载文件失败";
   } finally {
     detailLoading.value = false;
   }
 }
 
-function reloadRows(): void {
-  if (latestVersion.value) {
-    void loadRows(latestVersion.value);
-  }
+function handleSortChange(payload: {
+  sortBy: string;
+  sortDir: "asc" | "desc";
+}): void {
+  sortBy.value = payload.sortBy;
+  sortDir.value = payload.sortDir;
 }
 
 function goBack(): void {
   const workspaceId =
-    detail.value?.file.workspaceId ??
-    workspaceStore.currentWorkspaceId;
+    detail.value?.file.workspaceId ?? workspaceStore.currentWorkspaceId;
 
   if (workspaceId) {
     router.push(`/workspaces/${workspaceId}`);
@@ -100,10 +95,22 @@ function goBack(): void {
   }
 }
 
-function cellText(row: VersionRow, keyName: string): string {
-  const value = row[keyName];
-  return value === null || value === undefined ? "" : String(value);
-}
+// LIGHT 搜索300ms防抖
+watch(searchInput, () => {
+  if (searchTimer !== undefined) {
+    window.clearTimeout(searchTimer);
+  }
+
+  searchTimer = window.setTimeout(() => {
+    appliedQuery.value = searchInput.value.trim();
+  }, 300);
+});
+
+onBeforeUnmount(() => {
+  if (searchTimer !== undefined) {
+    window.clearTimeout(searchTimer);
+  }
+});
 
 onMounted(() => {
   void loadFile();
@@ -122,9 +129,7 @@ watch(
     <AppSidebar />
 
     <main class="file-main">
-      <div v-if="detailLoading" class="status-card">
-        正在加载文件...
-      </div>
+      <div v-if="detailLoading" class="status-card">正在加载文件...</div>
 
       <div v-else-if="detailError" class="status-card error">
         <p>{{ detailError }}</p>
@@ -158,72 +163,39 @@ watch(
             </div>
           </div>
 
-          <span v-if="latestVersion" class="status-badge ready">
-            就绪
-          </span>
+          <span v-if="latestVersion" class="status-badge ready"> 就绪 </span>
         </header>
 
         <section v-if="!latestVersion" class="status-card">
           文件还没有完成上传，暂时不能查看表格。
         </section>
 
-        <section v-else class="table-card">
-          <div class="table-toolbar">
-            <span>
-              仅显示前 {{ rows.length }} 行 / 共
-              {{ total.toLocaleString() }} 行
+        <template v-else>
+          <div class="table-controls">
+            <input
+              v-model="searchInput"
+              class="search-input"
+              type="search"
+              placeholder="搜索表格内容"
+            />
+            <span v-if="sortBy" class="sort-info">
+              排序：{{ sortLabel }}
+              {{ sortDir === "asc" ? "升序" : "降序" }}
             </span>
-            <span class="toolbar-note">
-              搜索、排序和虚拟滚动将在下一格实现
-            </span>
           </div>
 
-          <div v-if="rowsLoading" class="status-card">
-            正在加载表格数据...
-          </div>
-
-          <div v-else-if="rowsError" class="status-card error">
-            <p>{{ rowsError }}</p>
-            <button type="button" class="retry-btn" @click="reloadRows">
-              重试
-            </button>
-          </div>
-
-          <div v-else class="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th class="row-index">#</th>
-                  <th
-                    v-for="column in columns"
-                    :key="column.keyName"
-                  >
-                    {{ column.label }}
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr
-                  v-for="row in rows"
-                  :key="row.rowIndex"
-                >
-                  <td class="row-index">{{ row.rowIndex + 1 }}</td>
-                  <td
-                    v-for="column in columns"
-                    :key="column.keyName"
-                    :title="cellText(row, column.keyName)"
-                  >
-                    {{ cellText(row, column.keyName) }}
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-
-            <p v-if="rows.length === 0" class="empty-rows">
-              没有数据行
-            </p>
-          </div>
-        </section>
+          <!-- LIGHT 虚拟滚动 -->
+          <RemoteVirtualTable
+            :key="latestVersion.id"
+            :version-id="latestVersion.id"
+            :columns="columns"
+            :row-count="latestVersion.rowCount"
+            :q="appliedQuery"
+            :sort-by="sortBy"
+            :sort-dir="sortDir"
+            @sort-change="handleSortChange"
+          />
+        </template>
       </template>
     </main>
   </div>
@@ -339,81 +311,33 @@ watch(
   color: #67c23a;
 }
 
-.table-card {
-  margin-top: 20px;
-  overflow: hidden;
-  border: 1px solid rgba(191, 161, 117, 0.15);
-  border-radius: 12px;
-  background: #fff;
-}
-
-.table-toolbar {
+.table-controls {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 14px 20px;
-  border-bottom: 1px solid rgba(191, 161, 117, 0.12);
+  margin-top: 20px;
+}
+
+.search-input {
+  width: 280px;
+  box-sizing: border-box;
+  padding: 9px 12px;
+  border: 1px solid #e6e0d8;
+  border-radius: 8px;
+  background: #fffdf9;
+  color: #333;
+  font-size: 13px;
+  outline: none;
+}
+
+.search-input:focus {
+  border-color: #bfa175;
+  box-shadow: 0 0 0 3px rgba(191, 161, 117, 0.12);
+}
+
+.sort-info {
   color: #8a7355;
   font-size: 12px;
-}
-
-.toolbar-note {
-  color: #aaa;
-}
-
-.table-scroll {
-  max-height: 65vh;
-  overflow: auto;
-}
-
-table {
-  width: 100%;
-  border-collapse: collapse;
-  min-width: max-content;
-}
-
-th,
-td {
-  padding: 12px 16px;
-  border-bottom: 1px solid rgba(191, 161, 117, 0.1);
-  text-align: left;
-  font-size: 13px;
-  white-space: nowrap;
-}
-
-th {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  background: #faf7f2;
-  color: #8a7355;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-td {
-  max-width: 320px;
-  overflow: hidden;
-  color: #444;
-  text-overflow: ellipsis;
-}
-
-tbody tr:hover {
-  background: rgba(191, 161, 117, 0.03);
-}
-
-.row-index {
-  width: 56px;
-  color: #bbb;
-  text-align: right;
-}
-
-.empty-rows {
-  margin: 0;
-  padding: 32px;
-  color: #aaa;
-  font-size: 13px;
-  text-align: center;
 }
 </style>

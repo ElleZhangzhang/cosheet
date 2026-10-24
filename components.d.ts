@@ -13,6 +13,7 @@ declare module 'vue' {
   export interface GlobalComponents {
     AppSidebar: typeof import('./src/components/AppSidebar.vue')['default']
     FileUploadDialog: typeof import('./src/components/FileUploadDialog.vue')['default']
+    RemoteVirtualTable: typeof import('./src/components/DataTable/RemoteVirtualTable.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     UnfinishedUploads: typeof import('./src/components/UnfinishedUploads.vue')['default']
