@@ -6,6 +6,11 @@ import { readChunk } from "../storage/chunks";
 import { HttpError } from "../utils/httpError";
 import { validateRowsQuery } from "../utils/validate";
 import type { FileColumnInput } from "../utils/validate";
+import {
+  getAllCellEdits,
+  getCellEditsInRange,
+} from "./cellEdits";
+import type { CellEditsMap } from "./cellEdits";
 import { assertWorkspaceAccess } from "./permissions";
 
 interface VersionRowsContextRow extends RowDataPacket {
@@ -18,7 +23,7 @@ interface VersionRowsContextRow extends RowDataPacket {
 }
 
 interface IndexedRow {
-  row: Record<string, unknown>; // {column1:value} {column2:value}
+  row: Record<string, unknown>; // {column1: value, column2: value}
   rowIndex: number;
 }
 
@@ -173,6 +178,20 @@ function compareIndexedRows(
   return a.rowIndex - b.rowIndex;
 }
 
+// 用 cell_edits 覆盖基础行
+function applyCellEdits(
+  rows: IndexedRow[],
+  edits: CellEditsMap
+): void {
+  for (const item of rows) {
+    const rowEdits = edits.get(item.rowIndex);
+
+    if (rowEdits) {
+      item.row = { ...item.row, ...rowEdits };
+    }
+  }
+}
+
 // 接收前端的翻页、搜索、排序请求，从磁盘里把对应的分片文件读出来，处理完后再返回给前端
 export async function getVersionRows(
   userId: string,
@@ -205,7 +224,7 @@ export async function getVersionRows(
       };
     }
 
-    // 跨分片读取合并
+    // 1.跨分片读取合并（数据存在磁盘的分片里，每片 500 行）
     const startChunk = Math.floor(query.offset / 500);
     const endChunk = Math.min(
       version.chunk_count - 1,
@@ -213,12 +232,27 @@ export async function getVersionRows(
     );
     indexedRows = await readIndexedRows(versionId, startChunk, endChunk);
 
-    // 分页
+    // 2.分页
     const startInChunk = query.offset - startChunk * 500;
     indexedRows = indexedRows.slice(
       startInChunk,
       startInChunk + query.limit
     );
+
+    // 先覆盖单元格编辑，再返回给前端
+    if (indexedRows.length > 0) {
+      const firstRow = indexedRows[0];
+      const lastRow = indexedRows[indexedRows.length - 1];
+
+      if (firstRow && lastRow) {
+        const edits = await getCellEditsInRange(
+          versionId,
+          firstRow.rowIndex,
+          lastRow.rowIndex
+        );
+        applyCellEdits(indexedRows, edits);
+      }
+    }
   } else {
     // OPTIMIZE 能不能再优化下
     // 1.全量拉取
@@ -228,7 +262,11 @@ export async function getVersionRows(
       version.chunk_count - 1
     );
 
-    // 搜索
+    // 2.覆盖单元格编辑，搜索/排序必须使用编辑后的值
+    const edits = await getAllCellEdits(versionId);
+    applyCellEdits(indexedRows, edits);
+
+    // 3.搜索：搜索每一个单元格
     if (query.q) {
       indexedRows = indexedRows.filter(({ row }) =>
         matchesQuery(row, columns, query.q)
@@ -237,7 +275,7 @@ export async function getVersionRows(
 
     total = query.q ? indexedRows.length : version.row_count;
 
-    // 排序
+    // 4.排序
     if (query.sortBy) {
       const sortColumn = columns.find(
         (column) => column.keyName === query.sortBy

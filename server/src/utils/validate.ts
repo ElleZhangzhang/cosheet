@@ -36,12 +36,17 @@ interface UpdateMemberRoleInput {
 interface CreateCommentInput {
   versionId: string;
   rowIndex: number;
-  columnKey: string | null;
+  columnKey: string | null; // 某个字段名，用于定位这一行的哪一列
   content: string;
 }
 
 interface UpdateCommentInput {
   resolved: boolean;
+}
+
+interface CellEditInput {
+  columnKey: string;
+  value: unknown;
 }
 
 //#region  file
@@ -526,6 +531,30 @@ export function validateCommentListQuery(
 }
 //#endregion
 
+//#region 7.cell edit相关校验
+export function validateCellEditInput(body: unknown): CellEditInput {
+  const data = asObject(body);
+
+  if (typeof data.columnKey !== "string" || !data.columnKey.trim()) {
+    throw new HttpError(400, "columnKey 不能为空");
+  }
+
+  const columnKey = data.columnKey.trim();
+  if (columnKey.length > 255) {
+    throw new HttpError(400, "columnKey 不能超过 255 个字符");
+  }
+
+  if (!("value" in data)) {
+    throw new HttpError(400, "缺少 value");
+  }
+
+  return {
+    columnKey,
+    value: data.value,
+  };
+}
+//#endregion
+
 export type {
   FileColumnInput,
   CreateFileInput,
@@ -539,4 +568,5 @@ export type {
   UpdateMemberRoleInput,
   CreateCommentInput,
   UpdateCommentInput,
+  CellEditInput,
 };

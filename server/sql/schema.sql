@@ -232,3 +232,26 @@ CREATE TABLE reports (
   CONSTRAINT fk_reports_creator
     FOREIGN KEY (created_by_id) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 单元格编辑覆盖层：原始chunk保持只读，协作编辑只写这里
+CREATE TABLE cell_edits (
+  id            VARCHAR(36)  PRIMARY KEY,
+  version_id    VARCHAR(36)  NOT NULL,
+  row_index     INT          NOT NULL,
+  column_key    VARCHAR(255) NOT NULL,
+  value_json    JSON         NOT NULL,
+  revision      BIGINT       NOT NULL DEFAULT 1,
+  updated_by_id VARCHAR(36)  NOT NULL,
+  updated_at    DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+                                ON UPDATE CURRENT_TIMESTAMP(3),
+
+  UNIQUE KEY uq_cell_edit (version_id, row_index, column_key),
+
+  -- 提升按版本查询的查询速度
+  KEY idx_cell_edits_version (version_id),
+
+  CONSTRAINT fk_cell_edits_version
+    FOREIGN KEY (version_id) REFERENCES file_versions(id) ON DELETE CASCADE,
+  CONSTRAINT fk_cell_edits_user
+    FOREIGN KEY (updated_by_id) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

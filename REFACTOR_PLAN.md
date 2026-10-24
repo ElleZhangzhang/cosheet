@@ -232,12 +232,12 @@ Vite 当前把 `/api` 代理到 `https://dashscope.aliyuncs.com`，`.env` 中有
 
 工作空间角色：
 
-| 角色 | 查看 | 评论 | 上传新版本 | 管理成员/文件 |
-|---|---|---|---|---|
-| owner | ✅ | ✅ | ✅ | ✅ |
-| editor | ✅ | ✅ | ✅ | ❌ |
-| commenter | ✅ | ✅ | ❌ | ❌ |
-| viewer | ✅ | ❌ | ❌ | ❌ |
+| 角色 | 查看 | 编辑单元格 | 评论 | 上传新版本 | 管理成员/文件 |
+|---|---|---|---|---|---|
+| owner | ✅ | ✅ | ✅ | ✅ | ✅ |
+| editor | ✅ | ✅ | ✅ | ✅ | ❌ |
+| commenter | ✅ | ❌ | ✅ | ❌ | ❌ |
+| viewer | ✅ | ❌ | ❌ | ❌ | ❌ |
 
 分享链接角色（v1）：
 
@@ -256,6 +256,8 @@ Vite 当前把 `/api` 代理到 `https://dashscope.aliyuncs.com`，`.env` 中有
    - 远程分页 + 虚拟滚动（固定行高）
    - 固定表头、按 columns 渲染、类型格式化
    - 服务端搜索（关键字）与按列排序
+   - 单元格编辑（owner/editor）
+   - WebSocket 实时同步、在线用户与光标
    - 版本选择；旧版本只读
    - 行级评论入口
 6. **评论**：对某行创建评论、列表、标记解决；按版本隔离；侧边栏展示。
@@ -273,8 +275,8 @@ Vite 当前把 `/api` 代理到 `https://dashscope.aliyuncs.com`，`.env` 中有
 
 - ❌ AI 推荐图表、AI 生成报告、任何 LLM 调用
 - ❌ ECharts / 图表 / 仪表盘 / 图表拖拽
-- ❌ 实时协作（WebSocket / OT / CRDT）
-- ❌ 在线编辑单元格、Excel 公式引擎
+- ❌ 字符级 OT/CRDT 合并（v1 采用单元格级 last-write-wins）
+- ❌ Excel 公式引擎、行列插入/删除（暂不做）
 - ❌ 复杂 RBAC / 审批流 / 组织架构
 - ❌ 微服务、Redis、消息队列
 - ❌ 完整回收站、标签、活动日志、通知（可后续）
@@ -1261,6 +1263,18 @@ mysql -u root -p < server/sql/schema.sql
 
 **验收**：两个账号在同一工作空间；commenter 能评论不能上传；viewer 只读；分享链接在无痕窗口可打开；过期链接失效。
 
+> **方向修正（2026-10-24）**：实时协同编辑优先于分享。先完成 Phase 2.5，再继续分享。
+
+### Phase 2.5：可编辑表格与实时协同（新增，优先）
+
+1. `cell_edits` 表 + 行查询覆盖层。
+2. `PATCH /api/versions/:versionId/cells/:rowIndex`，owner/editor，类型校验。
+3. WebSocket 鉴权、版本房间、单元格更新广播、在线用户/光标。
+4. 前端可编辑虚拟表格：双击编辑、乐观更新、防抖保存、远程更新合并。
+5. 评论/分享/版本读取覆盖后的数据；旧版本只读。
+
+**验收**：两个账号打开同一版本，编辑不同单元格后实时互相可见；同一单元格后写覆盖；viewer/commenter 不能编辑；分享页显示编辑后的数据。
+
 ### Phase 3：报告与版本
 
 1. 报告列表/创建/编辑/删除；TipTap 保存到服务端。
@@ -1339,7 +1353,7 @@ mysql -u root -p < server/sql/schema.sql
 6. **不要碰 `.history/`**；不要提交数据库文件、storage 文件、`.env`。
 7. **代码风格**：沿用现有英文标识符 + 中文注释；TypeScript 严格模式；`noUncheckedIndexedAccess` 下注意可空值。
 8. **每个阶段结束都要能运行**；先保证主流程，再优化样式。
-9. **不要过度设计**：v1 不做实时协作、公式、可编辑单元格、微服务、队列、Redis。
+9. **不要过度设计**：v1 做单元格级实时同步（WebSocket + last-write-wins），不做字符级 OT/CRDT、Excel 公式、行列插入/删除、微服务、队列、Redis。
 10. **完成后更新 `README.md` 和 `CLAUDE.md`**，写明前后端启动、环境变量、端口、种子账号。
 
 ## 23. 关键边界情况
@@ -1477,3 +1491,98 @@ pnpm dev             # http://localhost:5173，/api 代理到 3000
 - 新建：auth-test@example.com、Auth Test 的工作空间
 - 清理：已删除测试用户和对应工作空间
 ```
+
+## 28. 方向修正：实时协同编辑（2026-10-24）
+
+原第 4.3 节把实时协作和单元格编辑列为非目标。用户确认项目核心是**多人同时编辑同一张表**，因此调整为：
+
+> 可编辑表格 + 单元格级实时同步 + 在线用户/光标，保留现有上传、版本、评论、分享能力。
+
+### 28.1 v1 范围
+
+- owner/editor 可编辑**最新 ready 版本**的单元格。
+- commenter/viewer 只读。
+- 旧版本只读。
+- WebSocket 实时同步；同一单元格采用 last-write-wins。
+- 不做字符级 OT/CRDT、公式、行列插入/删除（暂缓）。
+
+### 28.2 数据模型
+
+原始 chunk rows 保持只读；新增 `cell_edits` 覆盖层：
+
+```sql
+CREATE TABLE cell_edits (
+  id            VARCHAR(36)  PRIMARY KEY,
+  version_id    VARCHAR(36)  NOT NULL,
+  row_index     INT          NOT NULL,
+  column_key    VARCHAR(255) NOT NULL,
+  value_json    JSON         NOT NULL,
+  revision      BIGINT       NOT NULL DEFAULT 1,
+  updated_by_id VARCHAR(36)  NOT NULL,
+  updated_at    DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+                                ON UPDATE CURRENT_TIMESTAMP(3),
+  UNIQUE KEY uq_cell_edit (version_id, row_index, column_key),
+  KEY idx_cell_edits_version (version_id),
+  CONSTRAINT fk_cell_edits_version
+    FOREIGN KEY (version_id) REFERENCES file_versions(id) ON DELETE CASCADE,
+  CONSTRAINT fk_cell_edits_user
+    FOREIGN KEY (updated_by_id) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+```
+
+读取行时：
+
+1. 读取基础 chunk rows。
+2. 查询该版本对应的 `cell_edits`。
+3. 用 edits 覆盖基础行。
+4. 再做搜索、排序、切片。
+
+搜索/排序必须基于覆盖后的值。
+
+### 28.3 编辑接口
+
+```http
+PATCH /api/versions/:versionId/cells/:rowIndex
+```
+
+Body：
+
+```json
+{ "columnKey": "Salary", "value": 12000 }
+```
+
+规则：
+
+- owner/editor。
+- 版本必须是文件最新的 ready 版本；旧版本 409。
+- 文件未软删除。
+- rowIndex 在 `[0, row_count - 1]`。
+- columnKey 在版本 columns 中。
+- value 按列类型校验；空值允许。
+- upsert `cell_edits`，revision + 1，记录 updated_by。
+- 返回 `{ cell: { rowIndex, columnKey, value, revision, updatedAt } }`。
+- 成功更新后通过 WebSocket 广播 `cell:update`。
+
+### 28.4 WebSocket
+
+- 使用 `ws`，复用现有 HTTP server。
+- 连接时 JWT 鉴权。
+- 房间：`version:<versionId>`。
+- 校验用户对版本所属工作空间有访问权限。
+- 事件：
+  - `cell:update`：广播单元格新值、revision、编辑者。
+  - `presence:join` / `presence:leave`
+  - `presence:cursor`：在线用户当前行/列。
+- 同一单元格同时编辑按 last-write-wins；前端以服务端返回的 revision 为准。
+
+### 28.5 与现有功能
+
+- 评论仍锚定原始 `rowIndex`，单元格编辑不改变行号。
+- 分享页、报告快照读取覆盖后的最新版本数据。
+- 新版本上传会建立新的基础数据；旧版本编辑冻结。
+- 前端 IndexedDB 行缓存需要按编辑更新或失效。
+- 可编辑表格仍使用虚拟滚动；只渲染可见行。
+
+### 28.6 优先级
+
+先完成 Phase 2.5 的“可编辑表格 + WebSocket 实时同步”，再继续分享和 Phase 3 报告。

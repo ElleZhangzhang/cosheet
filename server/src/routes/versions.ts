@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { asyncHandler } from "../middleware/asyncHandler";
+import { upsertCellEdit } from "../services/cellEdits";
 import { getVersionRows } from "../services/versionRows";
 import {
   cancelVersion,
@@ -8,7 +9,11 @@ import {
   uploadChunk,
 } from "../services/versions";
 import { HttpError } from "../utils/httpError";
-import { validateChunkInput, validateCompleteInput } from "../utils/validate";
+import {
+  validateCellEditInput,
+  validateChunkInput,
+  validateCompleteInput,
+} from "../utils/validate";
 
 export const versionsRouter = Router();
 
@@ -46,6 +51,22 @@ function getChunkIndex(
   return index;
 }
 
+function getRowIndex(
+  value: string | string[] | undefined
+): number {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (!raw) {
+    throw new HttpError(400, "缺少行索引");
+  }
+
+  const index = Number(raw);
+  if (!Number.isInteger(index) || index < 0) {
+    throw new HttpError(400, "行索引不合法");
+  }
+
+  return index;
+}
+
 // GET /api/versions/:versionId/chunks
 versionsRouter.get(
   "/:versionId/chunks",
@@ -70,6 +91,24 @@ versionsRouter.get(
     );
 
     res.json(result);
+  })
+);
+
+// PATCH /api/versions/:versionId/cells/:rowIndex
+versionsRouter.patch(
+  "/:versionId/cells/:rowIndex",
+  asyncHandler(async (req, res) => {
+    const input = validateCellEditInput(req.body);
+
+    const cell = await upsertCellEdit(
+      getUserId(req.userId),
+      getVersionId(req.params.versionId),
+      getRowIndex(req.params.rowIndex),
+      input.columnKey,
+      input.value
+    );
+
+    res.json({ cell });
   })
 );
 
