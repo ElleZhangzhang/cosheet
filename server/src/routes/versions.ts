@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { asyncHandler } from "../middleware/asyncHandler";
+import { broadcastCellUpdate } from "../realtime/ws";
 import { upsertCellEdit } from "../services/cellEdits";
 import { getVersionRows } from "../services/versionRows";
 import {
@@ -99,14 +100,17 @@ versionsRouter.patch(
   "/:versionId/cells/:rowIndex",
   asyncHandler(async (req, res) => {
     const input = validateCellEditInput(req.body);
+    const versionId = getVersionId(req.params.versionId);
 
     const cell = await upsertCellEdit(
       getUserId(req.userId),
-      getVersionId(req.params.versionId),
+      versionId,
       getRowIndex(req.params.rowIndex),
       input.columnKey,
       input.value
     );
+
+    broadcastCellUpdate(versionId, cell);
 
     res.json({ cell });
   })

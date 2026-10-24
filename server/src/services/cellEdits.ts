@@ -17,12 +17,16 @@ interface VersionEditContextRow extends RowDataPacket {
   workspace_id: string;
 }
 
-interface CellEditRow extends RowDataPacket {
+interface CellEditValueRow extends RowDataPacket {
   row_index: number;
   column_key: string;
   value_json: unknown;
+}
+
+interface CellEditRow extends CellEditValueRow {
   revision: number; // 单元格的修改次数
   updated_by_id: string;
+  updated_by_name: string;
   updated_at: Date;
 }
 
@@ -32,6 +36,7 @@ export interface CellEdit {
   value: unknown;
   revision: number;
   updatedById: string;
+  updatedByName: string;
   updatedAt: Date;
 }
 
@@ -47,7 +52,7 @@ function parseColumns(value: unknown): FileColumnInput[] {
   return parsed as FileColumnInput[];
 }
 
-function toEditsMap(rows: CellEditRow[]): CellEditsMap {
+function toEditsMap(rows: CellEditValueRow[]): CellEditsMap {
   const result: CellEditsMap = new Map();
 
   for (const row of rows) {
@@ -69,7 +74,7 @@ export async function getCellEditsInRange(
     return new Map();
   }
 
-  const [rows] = await pool.execute<CellEditRow[]>(
+  const [rows] = await pool.execute<CellEditValueRow[]>(
     `SELECT row_index, column_key, value_json
      FROM cell_edits
      WHERE version_id = ? AND row_index BETWEEN ? AND ?
@@ -84,7 +89,7 @@ export async function getCellEditsInRange(
 export async function getAllCellEdits(
   versionId: string
 ): Promise<CellEditsMap> {
-  const [rows] = await pool.execute<CellEditRow[]>(
+  const [rows] = await pool.execute<CellEditValueRow[]>(
     `SELECT row_index, column_key, value_json
      FROM cell_edits
      WHERE version_id = ?
@@ -210,10 +215,11 @@ export async function upsertCellEdit(
   );
 
   const [rows] = await pool.execute<CellEditRow[]>(
-    `SELECT row_index, column_key, value_json, revision,
-            updated_by_id, updated_at
-     FROM cell_edits
-     WHERE version_id = ? AND row_index = ? AND column_key = ?
+    `SELECT e.row_index, e.column_key, e.value_json, e.revision,
+            e.updated_by_id, u.name AS updated_by_name, e.updated_at
+     FROM cell_edits e
+     JOIN users u ON u.id = e.updated_by_id
+     WHERE e.version_id = ? AND e.row_index = ? AND e.column_key = ?
      LIMIT 1`,
     [versionId, rowIndex, columnKey]
   );
@@ -229,6 +235,7 @@ export async function upsertCellEdit(
     value: edit.value_json,
     revision: edit.revision,
     updatedById: edit.updated_by_id,
+    updatedByName: edit.updated_by_name,
     updatedAt: edit.updated_at,
   };
 }
