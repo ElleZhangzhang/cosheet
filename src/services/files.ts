@@ -2,12 +2,18 @@ import { request } from "@/api/http";
 import type { ColumnDef } from "@/types";
 import type {
   CreateFileResponse,
+  CreateVersionResponse,
   FileDetailResponse,
   FilesResponse,
 } from "@/types/api";
 
 interface CreateFileInput {
   name: string;
+  columns: ColumnDef[];
+  rowCount: number;
+}
+
+interface CreateVersionInput {
   columns: ColumnDef[];
   rowCount: number;
 }
@@ -44,4 +50,22 @@ function getFileDetail(fileId: string): Promise<FileDetailResponse> {
   return request<FileDetailResponse>(`/files/${fileId}`);
 }
 
-export { listFiles, createFile, getFileDetail };
+function createFileVersion(
+  fileId: string,
+  input: CreateVersionInput
+): Promise<CreateVersionResponse> {
+  return request<CreateVersionResponse>(
+    `/files/${fileId}/versions`,
+    {
+      method: "POST",
+      body: input,
+    }
+  );
+}
+
+export {
+  listFiles,
+  createFile,
+  getFileDetail,
+  createFileVersion,
+};

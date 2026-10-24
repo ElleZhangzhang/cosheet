@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ApiError } from "@/api/http";
 import { useFileParser } from "@/composables/useFileParse";
-import { createFile } from "@/services/files";
+import { createFile, createFileVersion } from "@/services/files";
 import {
   cancelVersion,
   completeVersion,
@@ -47,6 +47,7 @@ const props = defineProps<{
   open: boolean;
   workspaceId: string;
   resumeTask?: UploadTaskMeta | null;
+  targetFileId?: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -72,6 +73,10 @@ const fatalError = ref(false);
 const cancelRequested = ref(false);
 
 const busy = computed(() => phase.value !== "idle");
+
+const dialogTitle = computed(() =>
+  props.targetFileId ? "上传新版本" : "上传文件"
+);
 
 // 如果在上传中要unload，那么阻止默认行为
 function handleBeforeUnload(event: BeforeUnloadEvent): void {
@@ -561,14 +566,30 @@ async function startUpload(): Promise<void> {
   phase.value = "creating";
 
   try {
-    const created = await createFile(props.workspaceId, {
-      name: parsed.name,
-      columns: parsed.columns,
-      rowCount: parsed.rowCount,
-    });
+    let fileId: string;
+    let createdVersion: { id: string; chunkCount: number };
 
-    versionId.value = created.version.id;
-    totalChunks.value = created.version.chunkCount;
+    if (props.targetFileId) {
+      const created = await createFileVersion(props.targetFileId, {
+        columns: parsed.columns,
+        rowCount: parsed.rowCount,
+      });
+
+      fileId = props.targetFileId;
+      createdVersion = created.version;
+    } else {
+      const created = await createFile(props.workspaceId, {
+        name: parsed.name,
+        columns: parsed.columns,
+        rowCount: parsed.rowCount,
+      });
+
+      fileId = created.file.id;
+      createdVersion = created.version;
+    }
+
+    versionId.value = createdVersion.id;
+    totalChunks.value = createdVersion.chunkCount;
 
     if (cancelRequested.value) {
       await performCancel();
@@ -580,14 +601,14 @@ async function startUpload(): Promise<void> {
       try {
         await saveUploadTask(
           {
-            versionId: created.version.id,
-            fileId: created.file.id,
+            versionId: createdVersion.id,
+            fileId,
             workspaceId: props.workspaceId,
             fileName: file.name,
             fileSize: file.size,
             lastModified: file.lastModified,
             rowCount: parsed.rowCount,
-            chunkCount: created.version.chunkCount,
+            chunkCount: createdVersion.chunkCount,
             createdAt: Date.now(),
           },
           file
@@ -598,7 +619,7 @@ async function startUpload(): Promise<void> {
     }
 
     const indices = Array.from(
-      { length: created.version.chunkCount },
+      { length: createdVersion.chunkCount },
       (_, index) => index
     );
 
@@ -675,7 +696,7 @@ watch(
     <div v-if="open" class="dialog-overlay" @click.self="closeDialog">
       <div class="dialog-card">
         <header class="dialog-header">
-          <h2>上传文件</h2>
+          <h2>{{ dialogTitle }}</h2>
           <button
             type="button"
             class="close-btn"

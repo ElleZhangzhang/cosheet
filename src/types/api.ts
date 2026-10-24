@@ -87,6 +87,15 @@ interface CreateFileResponse {
   };
 }
 
+interface CreateVersionResponse {
+  version: {
+    id: string;
+    versionNumber: number;
+    status: FileVersionStatus;
+    chunkCount: number;
+  };
+}
+
 // 文件版本详情
 interface FileVersionDetail {
   id: string;
@@ -193,6 +202,7 @@ export type {
   FileSummary,
   FilesResponse,
   CreateFileResponse,
+  CreateVersionResponse,
   FileVersionDetail,
   FileDetailResponse,
   VersionRow,

@@ -3,6 +3,8 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import AppSidebar from "@/components/AppSidebar.vue";
 import RemoteVirtualTable from "@/components/DataTable/RemoteVirtualTable.vue";
+import FileUploadDialog from "@/components/FileUploadDialog.vue";
+import VersionSelector from "@/components/VersionSelector.vue";
 import { getFileDetail } from "@/services/files";
 import { useWorkspaceStore } from "@/stores/workspace";
 import type { FileDetailResponse } from "@/types/api";
@@ -19,11 +21,36 @@ const searchInput = ref("");
 const appliedQuery = ref("");
 const sortBy = ref<string | null>(null);
 const sortDir = ref<"asc" | "desc">("asc");
+const selectedVersionId = ref("");
+const uploadOpen = ref(false);
 
 let searchTimer: number | undefined;
 
 const latestVersion = computed(() => detail.value?.latestVersion ?? null);
-const columns = computed(() => latestVersion.value?.columns ?? []);
+
+const selectedVersion = computed(() => {
+  const versions = detail.value?.versions ?? [];
+
+  return (
+    versions.find((version) => version.id === selectedVersionId.value) ??
+    latestVersion.value
+  );
+});
+
+const isHistorical = computed(() =>
+  Boolean(
+    selectedVersion.value &&
+      latestVersion.value &&
+      selectedVersion.value.id !== latestVersion.value.id
+  )
+);
+
+const columns = computed(() => selectedVersion.value?.columns ?? []);
+
+const canUpload = computed(() => {
+  const role = workspaceStore.currentWorkspace?.role;
+  return role === "owner" || role === "editor";
+});
 
 const fileId = computed(() => {
   const value = route.params.fileId;
@@ -66,6 +93,7 @@ async function loadFile(): Promise<void> {
   try {
     const data = await getFileDetail(id);
     detail.value = data;
+    selectedVersionId.value = data.latestVersion?.id ?? "";
 
     await workspaceStore.loadWorkspaces();
     workspaceStore.selectWorkspace(data.file.workspaceId);
@@ -82,6 +110,27 @@ function handleSortChange(payload: {
 }): void {
   sortBy.value = payload.sortBy;
   sortDir.value = payload.sortDir;
+}
+
+function handleVersionChange(versionId: string): void {
+  const version = detail.value?.versions.find((item) => item.id === versionId);
+
+  if (!version || version.status !== "ready") {
+    return;
+  }
+
+  selectedVersionId.value = version.id;
+  resetQuery();
+}
+
+async function handleVersionUploaded(): Promise<void> {
+  uploadOpen.value = false;
+  await loadFile();
+}
+
+async function handleVersionUploadCancelled(): Promise<void> {
+  uploadOpen.value = false;
+  await loadFile();
 }
 
 function goBack(): void {
@@ -152,21 +201,43 @@ watch(
             <div class="title-text">
               <h1>{{ detail.file.name }}</h1>
               <p class="file-meta">
-                <template v-if="latestVersion">
-                  v{{ latestVersion.versionNumber }} ·
-                  {{ latestVersion.rowCount.toLocaleString() }} 行 ·
-                  {{ latestVersion.columns.length }} 列 ·
-                  {{ latestVersion.chunkCount }} 个分片
+                <template v-if="selectedVersion">
+                  v{{ selectedVersion.versionNumber }} ·
+                  {{ selectedVersion.rowCount.toLocaleString() }} 行 ·
+                  {{ selectedVersion.columns.length }} 列 ·
+                  {{ selectedVersion.chunkCount }} 个分片
                 </template>
                 <template v-else>还没有 ready 版本</template>
               </p>
             </div>
           </div>
 
-          <span v-if="latestVersion" class="status-badge ready"> 就绪 </span>
+          <div class="header-actions">
+            <VersionSelector
+              v-if="latestVersion"
+              :versions="detail.versions"
+              :selected-version-id="selectedVersionId"
+              @change="handleVersionChange"
+            />
+            <button
+              v-if="canUpload"
+              type="button"
+              class="upload-version-btn"
+              @click="uploadOpen = true"
+            >
+              上传新版本
+            </button>
+            <span
+              v-if="selectedVersion"
+              class="status-badge"
+              :class="isHistorical ? 'historical' : 'ready'"
+            >
+              {{ isHistorical ? "历史版本 · 只读" : "就绪" }}
+            </span>
+          </div>
         </header>
 
-        <section v-if="!latestVersion" class="status-card">
+        <section v-if="!selectedVersion" class="status-card">
           文件还没有完成上传，暂时不能查看表格。
         </section>
 
@@ -186,10 +257,10 @@ watch(
 
           <!-- LIGHT 虚拟滚动 -->
           <RemoteVirtualTable
-            :key="latestVersion.id"
-            :version-id="latestVersion.id"
+            :key="selectedVersion.id"
+            :version-id="selectedVersion.id"
             :columns="columns"
-            :row-count="latestVersion.rowCount"
+            :row-count="selectedVersion.rowCount"
             :q="appliedQuery"
             :sort-by="sortBy"
             :sort-dir="sortDir"
@@ -198,6 +269,23 @@ watch(
         </template>
       </template>
     </main>
+
+    <FileUploadDialog
+      v-if="detail"
+      v-model:open="uploadOpen"
+      :workspace-id="detail.file.workspaceId"
+      :target-file-id="detail.file.id"
+      @created="handleVersionUploaded"
+      @cancelled="handleVersionUploadCancelled"
+    />
+
+    <!-- KNOW -->
+    <!--
+    v-model:open="uploadOpen"
+    =
+    v-on:open="uploadOpen" 父将open传给子组件
+    @update:open="uploadOpen=$event" 子通过emit触发update:open改变open的值
+    -->
   </div>
 </template>
 
@@ -309,6 +397,34 @@ watch(
 .status-badge.ready {
   background: #f0f9eb;
   color: #67c23a;
+}
+
+.status-badge.historical {
+  background: #f4f4f5;
+  color: #909399;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.upload-version-btn {
+  padding: 7px 12px;
+  border: 1px solid rgba(191, 161, 117, 0.35);
+  border-radius: 7px;
+  background: rgba(191, 161, 117, 0.08);
+  color: #8a7355;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.upload-version-btn:hover {
+  background: rgba(191, 161, 117, 0.15);
 }
 
 .table-controls {

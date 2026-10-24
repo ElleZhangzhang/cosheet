@@ -17,6 +17,7 @@ declare module 'vue' {
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     UnfinishedUploads: typeof import('./src/components/UnfinishedUploads.vue')['default']
+    VersionSelector: typeof import('./src/components/VersionSelector.vue')['default']
     VirtualTable: typeof import('./src/components/DataTable/VirtualTable.vue')['default']
   }
 }
