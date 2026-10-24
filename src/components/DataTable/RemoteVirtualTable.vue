@@ -14,6 +14,7 @@ import type { VersionRow } from "@/types/api";
 const ROW_HEIGHT = 51;
 const BUFFER = 10;
 const INDEX_WIDTH = 56;
+const COMMENT_WIDTH = 72;
 
 const props = defineProps<{
   versionId: string;
@@ -22,6 +23,7 @@ const props = defineProps<{
   q: string;
   sortBy: string | null;
   sortDir: "asc" | "desc";
+  commentCounts?: Map<number, number>;
 }>();
 
 const emit = defineEmits<{
@@ -29,6 +31,7 @@ const emit = defineEmits<{
     e: "sort-change",
     payload: { sortBy: string; sortDir: "asc" | "desc" }
   ): void;
+  (e: "row-comment", rowIndex: number): void;
 }>();
 
 const { total, loading, error, loadRange, getRow, refresh } = useRemoteRows(
@@ -50,12 +53,14 @@ const totalHeight = computed(() => displayTotal.value * ROW_HEIGHT);
 
 const totalWidth = computed(
   () =>
-    INDEX_WIDTH + props.columns.reduce((sum, column) => sum + column.width, 0)
+    INDEX_WIDTH +
+    props.columns.reduce((sum, column) => sum + column.width, 0) +
+    COMMENT_WIDTH
 );
 
 const gridTemplate = computed(
   () =>
-    `${INDEX_WIDTH}px ${props.columns
+    `${INDEX_WIDTH}px ${COMMENT_WIDTH}px ${props.columns
       .map((column) => `${column.width}px`)
       .join(" ")}`
 );
@@ -144,6 +149,22 @@ function cellText(row: VersionRow | undefined, keyName: string): string {
   return value === null || value === undefined ? "" : String(value);
 }
 
+function commentCount(rowIndex: number): number {
+  return props.commentCounts?.get(rowIndex) ?? 0;
+}
+
+function handleRowClick(row: VersionRow | undefined): void {
+  if (!row) {
+    return;
+  }
+
+  emit("row-comment", row.rowIndex);
+}
+
+function handleRowComment(rowIndex: number): void {
+  emit("row-comment", rowIndex);
+}
+
 watch(
   [
     () => props.versionId,
@@ -202,6 +223,7 @@ onBeforeUnmount(() => {
           :style="{ gridTemplateColumns: gridTemplate }"
         >
           <div class="index-cell">#</div>
+          <div class="comment-header">评论</div>
           <button
             v-for="column in columns"
             :key="column.keyName"
@@ -222,13 +244,39 @@ onBeforeUnmount(() => {
               v-for="item in visibleRows"
               :key="item.index"
               class="table-row"
+              :class="{ clickable: Boolean(item.row) }"
               :style="{
                 transform: `translateY(${item.index * ROW_HEIGHT}px)`,
                 gridTemplateColumns: gridTemplate,
               }"
+              @click="handleRowClick(item.row)"
             >
               <div class="index-cell table-cell">
                 {{ item.index + 1 }}
+              </div>
+              <div class="comment-cell">
+                <button
+                  v-if="item.row"
+                  type="button"
+                  class="comment-btn"
+                  :class="{
+                    active: commentCount(item.row.rowIndex) > 0,
+                  }"
+                  :title="
+                    commentCount(item.row.rowIndex) > 0
+                      ? `${commentCount(item.row.rowIndex)} 条评论`
+                      : '添加评论'
+                  "
+                  @click.stop="handleRowComment(item.row.rowIndex)"
+                >
+                  <span class="comment-icon">💬</span>
+                  <span
+                    v-if="commentCount(item.row.rowIndex) > 0"
+                    class="comment-count"
+                  >
+                    {{ commentCount(item.row.rowIndex) }}
+                  </span>
+                </button>
               </div>
               <div
                 v-for="column in columns"
@@ -377,8 +425,63 @@ onBeforeUnmount(() => {
   border-bottom: 1px solid rgba(191, 161, 117, 0.1);
 }
 
+.table-row.clickable {
+  cursor: pointer;
+}
+
 .table-row:hover {
   background: rgba(191, 161, 117, 0.03);
+}
+
+.comment-header,
+.comment-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.comment-header {
+  color: #8a7355;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.comment-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 7px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #b08a2e;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0.3;
+  transition: opacity 0.15s, background-color 0.15s;
+}
+
+.table-row:hover .comment-btn,
+.comment-btn.active {
+  opacity: 1;
+}
+
+.comment-btn:hover {
+  background: rgba(191, 161, 117, 0.1);
+}
+
+.comment-icon {
+  font-size: 13px;
+}
+
+.comment-count {
+  min-width: 16px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: rgba(191, 161, 117, 0.18);
+  color: #8a7355;
+  font-size: 10px;
+  font-weight: 700;
 }
 
 .table-cell {

@@ -75,6 +75,39 @@ interface MemberResponse {
 }
 //#endregion
 
+//#region comment
+interface RowComment {
+  id: string;
+  versionId: string;
+  rowIndex: number;
+  columnKey: string | null;
+  content: string;
+  resolved: boolean;
+  authorId: string;
+  authorName: string;
+  createdAt: string;
+}
+
+interface CommentsResponse {
+  comments: RowComment[];
+}
+
+interface CreateCommentInput {
+  versionId: string;
+  rowIndex: number;
+  columnKey?: string | null;
+  content: string;
+}
+
+interface UpdateCommentInput {
+  resolved: boolean;
+}
+
+interface CommentResponse {
+  comment: RowComment;
+}
+//#endregion
+
 //#region file
 type FileVersionStatus = "uploading" | "ready";
 
@@ -230,6 +263,11 @@ export type {
   AddMemberInput,
   UpdateMemberRoleInput,
   MemberResponse,
+  RowComment,
+  CommentsResponse,
+  CreateCommentInput,
+  UpdateCommentInput,
+  CommentResponse,
   FileVersionStatus,
   FileVersionSummary,
   FileSummary,

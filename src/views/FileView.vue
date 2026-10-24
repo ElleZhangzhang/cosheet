@@ -2,15 +2,24 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import AppSidebar from "@/components/AppSidebar.vue";
+import CommentsPanel from "@/components/CommentsPanel.vue";
 import RemoteVirtualTable from "@/components/DataTable/RemoteVirtualTable.vue";
 import FileUploadDialog from "@/components/FileUploadDialog.vue";
 import VersionSelector from "@/components/VersionSelector.vue";
+import {
+  createComment,
+  deleteComment as deleteCommentRequest,
+  listComments,
+  updateComment as updateCommentRequest,
+} from "@/services/comments";
 import { getFileDetail } from "@/services/files";
+import { useAuthStore } from "@/stores/auth";
 import { useWorkspaceStore } from "@/stores/workspace";
-import type { FileDetailResponse } from "@/types/api";
+import type { FileDetailResponse, RowComment } from "@/types/api";
 
 const route = useRoute();
 const router = useRouter();
+const authStore = useAuthStore();
 const workspaceStore = useWorkspaceStore();
 
 const detail = ref<FileDetailResponse | null>(null);
@@ -24,7 +33,16 @@ const sortDir = ref<"asc" | "desc">("asc");
 const selectedVersionId = ref("");
 const uploadOpen = ref(false);
 
+const comments = ref<RowComment[]>([]);
+const commentsLoading = ref(false);
+const commentsError = ref("");
+const commentsOpen = ref(false);
+const commentRowIndex = ref<number | null>(null);
+const commentSubmitting = ref(false);
+const commentActionError = ref("");
+
 let searchTimer: number | undefined;
+let commentsRequestId = 0;
 
 const latestVersion = computed(() => detail.value?.latestVersion ?? null);
 
@@ -47,10 +65,56 @@ const isHistorical = computed(() =>
 
 const columns = computed(() => selectedVersion.value?.columns ?? []);
 
+const currentRole = computed(
+  () => workspaceStore.currentWorkspace?.role
+);
+
 const canUpload = computed(() => {
-  const role = workspaceStore.currentWorkspace?.role;
+  const role = currentRole.value;
   return role === "owner" || role === "editor";
 });
+
+const canComment = computed(() => {
+  const role = currentRole.value;
+  return (
+    role === "owner" || role === "editor" || role === "commenter"
+  );
+});
+
+const canResolveAny = computed(
+  () => currentRole.value === "owner" || currentRole.value === "editor"
+);
+
+const canDeleteAny = computed(() => currentRole.value === "owner");
+
+const currentUserId = computed(() => authStore.user?.id ?? "");
+
+const commentCounts = computed(() => {
+  const counts = new Map<number, number>();
+
+  for (const comment of comments.value) {
+    counts.set(
+      comment.rowIndex,
+      (counts.get(comment.rowIndex) ?? 0) + 1
+    );
+  }
+
+  return counts;
+});
+
+const commentsForRow = computed(() => {
+  if (commentRowIndex.value === null) {
+    return [];
+  }
+
+  return comments.value.filter(
+    (comment) => comment.rowIndex === commentRowIndex.value
+  );
+});
+
+const panelError = computed(
+  () => commentsError.value || commentActionError.value
+);
 
 const fileId = computed(() => {
   const value = route.params.fileId;
@@ -132,6 +196,147 @@ async function handleVersionUploadCancelled(): Promise<void> {
   uploadOpen.value = false;
   await loadFile();
 }
+
+async function loadComments(versionId: string): Promise<void> {
+  if (!fileId.value || !versionId) {
+    comments.value = [];
+    return;
+  }
+
+  const requestId = ++commentsRequestId;
+  commentsLoading.value = true;
+  commentsError.value = "";
+
+  try {
+    const data = await listComments(fileId.value, versionId);
+
+    if (requestId !== commentsRequestId) {
+      return;
+    }
+
+    comments.value = data.comments;
+  } catch (err) {
+    if (requestId !== commentsRequestId) {
+      return;
+    }
+
+    commentsError.value =
+      err instanceof Error ? err.message : "加载评论失败";
+  } finally {
+    if (requestId === commentsRequestId) {
+      commentsLoading.value = false;
+    }
+  }
+}
+
+function handleRowComment(rowIndex: number): void {
+  commentRowIndex.value = rowIndex;
+  commentsOpen.value = true;
+  commentActionError.value = "";
+}
+
+async function handleCreateComment(content: string): Promise<void> {
+  const version = selectedVersion.value;
+  const rowIndex = commentRowIndex.value;
+
+  if (
+    !version ||
+    rowIndex === null ||
+    !canComment.value ||
+    commentSubmitting.value
+  ) {
+    return;
+  }
+
+  commentSubmitting.value = true;
+  commentActionError.value = "";
+
+  try {
+    await createComment(fileId.value, {
+      versionId: version.id,
+      rowIndex,
+      content,
+    });
+    await loadComments(version.id);
+  } catch (err) {
+    commentActionError.value =
+      err instanceof Error ? err.message : "创建评论失败";
+  } finally {
+    commentSubmitting.value = false;
+  }
+}
+
+async function handleToggleCommentResolved(
+  comment: RowComment,
+  resolved: boolean
+): Promise<void> {
+  if (commentSubmitting.value) {
+    return;
+  }
+
+  commentSubmitting.value = true;
+  commentActionError.value = "";
+
+  try {
+    await updateCommentRequest(comment.id, resolved);
+
+    if (selectedVersion.value) {
+      await loadComments(selectedVersion.value.id);
+    }
+  } catch (err) {
+    commentActionError.value =
+      err instanceof Error ? err.message : "更新评论失败";
+  } finally {
+    commentSubmitting.value = false;
+  }
+}
+
+async function handleDeleteComment(
+  comment: RowComment
+): Promise<void> {
+  if (commentSubmitting.value) {
+    return;
+  }
+
+  if (!confirm("确定删除这条评论吗？")) {
+    return;
+  }
+
+  commentSubmitting.value = true;
+  commentActionError.value = "";
+
+  try {
+    await deleteCommentRequest(comment.id);
+
+    if (selectedVersion.value) {
+      await loadComments(selectedVersion.value.id);
+    }
+  } catch (err) {
+    commentActionError.value =
+      err instanceof Error ? err.message : "删除评论失败";
+  } finally {
+    commentSubmitting.value = false;
+  }
+}
+
+watch(
+  () => selectedVersion.value?.id ?? "",
+  (versionId) => {
+    commentsRequestId += 1;
+    commentsOpen.value = false;
+    commentRowIndex.value = null;
+    commentActionError.value = "";
+
+    if (versionId) {
+      void loadComments(versionId);
+    } else {
+      comments.value = [];
+      commentsLoading.value = false;
+      commentsError.value = "";
+    }
+  },
+  { immediate: true }
+);
 
 function goBack(): void {
   const workspaceId =
@@ -264,7 +469,9 @@ watch(
             :q="appliedQuery"
             :sort-by="sortBy"
             :sort-dir="sortDir"
+            :comment-counts="commentCounts"
             @sort-change="handleSortChange"
+            @row-comment="handleRowComment"
           />
         </template>
       </template>
@@ -277,6 +484,24 @@ watch(
       :target-file-id="detail.file.id"
       @created="handleVersionUploaded"
       @cancelled="handleVersionUploadCancelled"
+    />
+
+    <CommentsPanel
+      v-if="detail"
+      :open="commentsOpen"
+      :row-index="commentRowIndex ?? 0"
+      :comments="commentsForRow"
+      :loading="commentsLoading"
+      :error="panelError"
+      :submitting="commentSubmitting"
+      :can-comment="canComment"
+      :can-resolve-any="canResolveAny"
+      :can-delete-any="canDeleteAny"
+      :current-user-id="currentUserId"
+      @close="commentsOpen = false"
+      @create="handleCreateComment"
+      @toggle-resolve="handleToggleCommentResolved"
+      @delete="handleDeleteComment"
     />
 
     <!-- KNOW -->
