@@ -160,11 +160,14 @@ interface CreateVersionResponse {
 interface FileVersionDetail {
   id: string;
   versionNumber: number;
+  baseVersionId: string | null;
   status: FileVersionStatus;
   columns: ColumnDef[];
   rowCount: number;
   chunkCount: number;
   createdAt: string;
+  // 该版本被重新编辑的条数（被放进cell_edits的编辑条数）
+  pendingEditCount: number;
 }
 
 interface FileDetailResponse {

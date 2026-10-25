@@ -99,12 +99,15 @@ CREATE TABLE files (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE file_versions (
-  id             VARCHAR(36) PRIMARY KEY,
-  file_id        VARCHAR(36) NOT NULL,
-  version_number INT         NOT NULL,
-  
+  id              VARCHAR(36) PRIMARY KEY,
+  file_id         VARCHAR(36) NOT NULL,
+  version_number  INT         NOT NULL,
+
+  -- 保留版本的来源版本；首版为 NULL
+  base_version_id VARCHAR(36) NULL,
+
   -- 列定义
-  columns_json   JSON        NOT NULL,
+  columns_json    JSON        NOT NULL,
 
   -- 总行数
   row_count      INT         NOT NULL,
@@ -122,6 +125,7 @@ CREATE TABLE file_versions (
   UNIQUE KEY uq_file_version (file_id, version_number),
 
   KEY idx_versions_file (file_id),
+  KEY idx_versions_base (base_version_id),
 
   -- 两条级联删除
   CONSTRAINT fk_versions_file

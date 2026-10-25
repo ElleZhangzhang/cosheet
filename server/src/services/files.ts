@@ -297,21 +297,25 @@ interface FileRow extends RowDataPacket {
 interface VersionRow extends RowDataPacket {
   id: string;
   version_number: number;
+  base_version_id: string | null;
   status: string;
   columns_json: unknown;
   row_count: number;
   chunk_count: number;
   created_at: Date;
+  pending_edit_count: number;
 }
 
 interface VersionSummary {
   id: string;
   versionNumber: number;
+  baseVersionId: string | null;
   status: string;
   columns: FileColumnInput[];
   rowCount: number;
   chunkCount: number;
   createdAt: Date;
+  pendingEditCount: number;
 }
 
 interface FileDetail {
@@ -370,22 +374,30 @@ async function getAccessibleFile(
 // 查询文件的所有版本，新版本在前
 async function queryVersions(fileId: string): Promise<VersionSummary[]> {
   const [rows] = await pool.execute<VersionRow[]>(
-    `SELECT id, version_number, status, columns_json, row_count,
-            chunk_count, created_at
-     FROM file_versions
-     WHERE file_id = ?
-     ORDER BY version_number DESC`,
+    `SELECT v.id, v.version_number, v.base_version_id, v.status,
+            v.columns_json, v.row_count, v.chunk_count, v.created_at,
+            (
+              SELECT COUNT(*)
+              FROM cell_edits e
+              WHERE e.version_id = v.id
+            ) AS pending_edit_count
+     FROM file_versions v
+     WHERE v.file_id = ?
+     ORDER BY v.version_number DESC`,
     [fileId]
   );
 
   return rows.map((row) => ({
     id: row.id,
     versionNumber: row.version_number,
+    baseVersionId: row.base_version_id,
     status: row.status,
     columns: parseColumns(row.columns_json),
     rowCount: row.row_count,
     chunkCount: row.chunk_count,
     createdAt: row.created_at,
+    // 被重新编辑的行数
+    pendingEditCount: Number(row.pending_edit_count),
   }));
 }
 

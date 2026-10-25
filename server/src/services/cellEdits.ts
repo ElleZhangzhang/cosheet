@@ -9,11 +9,9 @@ import { assertWorkspaceAccess } from "./permissions";
 
 interface VersionEditContextRow extends RowDataPacket {
   id: string;
-  version_number: number;
   status: string;
   row_count: number;
   columns_json: unknown;
-  latest_version_number: number;
   workspace_id: string;
 }
 
@@ -145,7 +143,7 @@ function normalizeCellValue(
   return String(value);
 }
 
-// 编辑最新ready版本的单个单元格
+// 编辑任意ready版本的单个单元格
 export async function upsertCellEdit(
   userId: string,
   versionId: string,
@@ -154,8 +152,7 @@ export async function upsertCellEdit(
   value: unknown
 ): Promise<CellEdit> {
   const [versions] = await pool.execute<VersionEditContextRow[]>(
-    `SELECT v.id, v.version_number, v.status, v.row_count, v.columns_json,
-            f.latest_version_number, f.workspace_id
+    `SELECT v.id, v.status, v.row_count, v.columns_json, f.workspace_id
      FROM file_versions v
      JOIN files f ON f.id = v.file_id
      WHERE v.id = ? AND f.deleted_at IS NULL
@@ -176,9 +173,6 @@ export async function upsertCellEdit(
   if (version.status !== "ready") {
     throw new HttpError(409, "版本尚未完成上传");
   }
-  if (version.version_number !== version.latest_version_number) {
-    throw new HttpError(409, "只能编辑最新 ready 版本");
-  }
   if (
     !Number.isInteger(rowIndex) ||
     rowIndex < 0 ||
@@ -195,6 +189,7 @@ export async function upsertCellEdit(
 
   const normalizedValue = normalizeCellValue(value, column.type);
 
+  // FIND 新编辑内容一条一条地插入cell_edits库了（旧版本的内容是不再做任何改动的，新修改全添加为新版本）
   await pool.execute(
     `INSERT INTO cell_edits
      (id, version_id, row_index, column_key, value_json, revision, updated_by_id)
