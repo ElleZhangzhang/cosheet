@@ -1,8 +1,36 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { onBeforeUnmount, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useAuthStore } from "@/stores/auth";
 import { useWorkspaceStore } from "@/stores/workspace";
+
+const SIDEBAR_WIDTH_KEY = "cosheet_sidebar_width";
+const DEFAULT_SIDEBAR_WIDTH = 280;
+const MIN_SIDEBAR_WIDTH = 200;
+const MAX_SIDEBAR_WIDTH = 420;
+
+function clampSidebarWidth(width: number): number {
+  return Math.min(
+    MAX_SIDEBAR_WIDTH,
+    Math.max(MIN_SIDEBAR_WIDTH, width)
+  );
+}
+
+function readSidebarWidth(): number {
+  try {
+    const stored = localStorage.getItem(SIDEBAR_WIDTH_KEY);
+    if (!stored) {
+      return DEFAULT_SIDEBAR_WIDTH;
+    }
+
+    const width = Number(stored);
+    return Number.isFinite(width)
+      ? clampSidebarWidth(width)
+      : DEFAULT_SIDEBAR_WIDTH;
+  } catch {
+    return DEFAULT_SIDEBAR_WIDTH;
+  }
+}
 
 const router = useRouter();
 const auth = useAuthStore();
@@ -11,6 +39,83 @@ const workspaceStore = useWorkspaceStore();
 const showCreateForm = ref(false);
 const newWorkspaceName = ref("");
 const createError = ref("");
+
+const sidebarWidth = ref(readSidebarWidth());
+const resizingSidebar = ref(false);
+let resizeStartX = 0;
+let resizeStartWidth = 0;
+
+function handleResizeMove(event: PointerEvent): void {
+  if (!resizingSidebar.value) {
+    return;
+  }
+
+  sidebarWidth.value = clampSidebarWidth(
+    resizeStartWidth + event.clientX - resizeStartX
+  );
+}
+
+function stopResizing(): void {
+  if (!resizingSidebar.value) {
+    return;
+  }
+
+  resizingSidebar.value = false;
+  document.body.classList.remove("sidebar-resizing");
+  window.removeEventListener("pointermove", handleResizeMove);
+  window.removeEventListener("pointerup", handleResizeEnd);
+  window.removeEventListener("pointercancel", handleResizeEnd);
+  window.removeEventListener("blur", handleResizeEnd);
+}
+
+function saveSidebarWidth(): void {
+  try {
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth.value));
+  } catch {
+    // 保存失败不影响调整宽度
+  }
+}
+
+function handleResizeEnd(): void {
+  if (!resizingSidebar.value) {
+    return;
+  }
+
+  stopResizing();
+  saveSidebarWidth();
+}
+
+function handleResizeStart(event: PointerEvent): void {
+  if (event.button !== 0) {
+    return;
+  }
+
+  event.preventDefault();
+  resizingSidebar.value = true;
+  resizeStartX = event.clientX;
+  resizeStartWidth = sidebarWidth.value;
+
+  const handle = event.currentTarget;
+  if (handle instanceof HTMLElement) {
+    handle.setPointerCapture(event.pointerId);
+  }
+
+  document.body.classList.add("sidebar-resizing");
+  window.addEventListener("pointermove", handleResizeMove);
+  window.addEventListener("pointerup", handleResizeEnd);
+  window.addEventListener("pointercancel", handleResizeEnd);
+  window.addEventListener("blur", handleResizeEnd);
+}
+
+function resetSidebarWidth(): void {
+  sidebarWidth.value = DEFAULT_SIDEBAR_WIDTH;
+  saveSidebarWidth();
+}
+
+onBeforeUnmount(() => {
+  stopResizing();
+  saveSidebarWidth();
+});
 
 function selectWorkspace(id: string): void {
   workspaceStore.selectWorkspace(id);
@@ -64,7 +169,10 @@ function handleLogout(): void {
 </script>
 
 <template>
-  <aside class="app-sidebar">
+  <aside
+    class="app-sidebar"
+    :style="{ width: `${sidebarWidth}px` }"
+  >
     <div class="brand">Co<span>Sheet</span></div>
 
     <div class="sidebar-section">
@@ -148,11 +256,26 @@ function handleLogout(): void {
         退出登录
       </button>
     </div>
+
+    <div
+      class="sidebar-resize-handle"
+      :class="{ active: resizingSidebar }"
+      role="separator"
+      aria-orientation="vertical"
+      :aria-valuemin="MIN_SIDEBAR_WIDTH"
+      :aria-valuemax="MAX_SIDEBAR_WIDTH"
+      :aria-valuenow="sidebarWidth"
+      aria-label="拖动调整侧边栏宽度"
+      title="拖动调整宽度，双击恢复默认"
+      @pointerdown="handleResizeStart"
+      @dblclick="resetSidebarWidth"
+    ></div>
   </aside>
 </template>
 
 <style scoped>
 .app-sidebar {
+  position: relative;
   width: 280px;
   height: 100vh;
   box-sizing: border-box;
@@ -164,6 +287,43 @@ function handleLogout(): void {
   border-right: 1px solid rgba(191, 161, 117, 0.15);
   color: #333;
   font-family: "PingFang SC", "Helvetica Neue", Helvetica, Arial, sans-serif;
+}
+
+.sidebar-resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 20;
+  width: 7px;
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.sidebar-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 1px;
+  background: transparent;
+  transition: background-color 0.15s;
+}
+
+.sidebar-resize-handle:hover::after,
+.sidebar-resize-handle.active::after {
+  background: #bfa175;
+}
+
+:global(body.sidebar-resizing) {
+  cursor: col-resize;
+  user-select: none;
+}
+
+:global(body.sidebar-resizing *) {
+  cursor: col-resize !important;
+  user-select: none !important;
 }
 
 .brand {

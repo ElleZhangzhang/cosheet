@@ -14,6 +14,7 @@ interface RealtimeHandlers {
   onJoined?: (user: RealtimeUser) => void;
   onPresence?: (users: RealtimeUser[]) => void;
   onCursor?: (cursor: RealtimeCursor) => void;
+  onCursorClear?: (user: RealtimeUser) => void;
   onCellUpdate?: (update: RealtimeCellUpdate) => void;
   onError?: (message: string) => void;
   onClose?: (code: number, reason: string) => void;
@@ -21,6 +22,7 @@ interface RealtimeHandlers {
 
 interface RealtimeClient {
   sendCursor(rowIndex: number, columnKey: string | null): void;
+  clearCursor(): void;
   close(): void;
 }
 
@@ -85,6 +87,7 @@ function createRealtimeClient(
     handlers.onError?.("未登录");
     return {
       sendCursor: () => undefined,
+      clearCursor: () => undefined,
       close: () => undefined,
     };
   }
@@ -158,6 +161,13 @@ function createRealtimeClient(
         });
         return;
       }
+      case "cursor:clear": {
+        const user = parseUser(parsed.user);
+        if (user) {
+          handlers.onCursorClear?.(user);
+        }
+        return;
+      }
       case "cell:update": {
         const cell = parseCell(parsed.cell);
         const editor = parseUser(parsed.editor);
@@ -208,6 +218,14 @@ function createRealtimeClient(
       }
 
       send({ type: "cursor", rowIndex, columnKey });
+    },
+    // 结束编辑/离开单元格时，通知其他人移除自己的光标
+    clearCursor() {
+      if (!joined) {
+        return;
+      }
+
+      send({ type: "cursor:clear" });
     },
     // 由前端调用，告诉后端leave并socket.close断开连接
     close() {

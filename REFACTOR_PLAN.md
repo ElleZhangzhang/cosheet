@@ -2,18 +2,18 @@
 
 > 目标读者：负责实施改造的 Claude。
 > 使用方式：先完整阅读本文，再通读现有代码，按第 9 节的阶段顺序实施。
-> 核心约束：**删除所有 AI 与图表功能；使用真实 Node 后端（不用 mock）；保留 Web Worker 文件解析、IndexedDB 分片/缓存、虚拟滚动、TipTap 富文本 + 自定义 Extension、PDF 导出。**
+> 核心约束：**删除所有 AI 与图表功能；使用真实 Node 后端（不用 mock）；保留 Web Worker 文件解析、IndexedDB 分片/缓存、虚拟滚动。报告、表格快照、PDF 均不做。**
 
 ---
 
 ## 0. 一句话目标
 
-把现有「浏览器本地 Excel 数据分析工具」改造成一个 **可登录、可上传、可分享、可评论、可写报告的云端表格协作平台**：
+把现有「浏览器本地 Excel 数据分析工具」改造成一个 **可登录、可上传、可分享、可评论、可协同编辑的云端表格协作平台**：
 
-- 前端：Vue 3 + Vite + TypeScript + Pinia + Element Plus + TipTap
+- 前端：Vue 3 + Vite + TypeScript + Pinia + Element Plus
 - 后端：Node.js + Express + MySQL（真实后端），后续可平移到 Java / Spring Boot
 - 文件数据：前端 Worker 解析 Excel → 分片上传 → 服务端持久化 → 虚拟表格按需拉取 → IndexedDB 缓存
-- 协作：工作空间、成员角色、行级评论、真实分享链接、版本历史、分析报告 + 数据快照 + PDF
+- 协作：工作空间、成员角色、行级评论、真实分享链接、版本历史、单元格实时协同、owner 保留版本
 
 **最终形态**：类似「轻量版腾讯文档/飞书表格」的数据表格协作平台，而不是 AI 图表生成器。
 
@@ -47,8 +47,6 @@
 | 文件解析 | `xlsx`（SheetJS）+ Web Worker |
 | 本地存储 | `idb`（IndexedDB） |
 | 图表 | ECharts 6（**将删除**） |
-| 富文本 | TipTap 3（StarterKit、Placeholder、Table 系列、自定义 Node） |
-| PDF | `html2canvas` + `jsPDF`（动态 import） |
 | 路由 | vue-router 5 |
 | AI | DashScope / 通义千问，经 Vite 代理 `/api` 调用（**将删除**） |
 
@@ -164,7 +162,7 @@ Vite 当前把 `/api` 代理到 `https://dashscope.aliyuncs.com`，`.env` 中有
   6. `while (heightLeft > 0)` 逐页 `addPage` + `addImage`
   7. `pdf.save('..._分析报告.pdf')`
 
-**改造后**：TipTap 和 PDF 保留；`chartEmbed` 换成 `tableSnapshot` 数据快照节点；报告保存到服务端；删除 AI 生成。
+**改造后**：报告、TipTap 报告内容和 PDF 导出全部删除；原 PDF 代码仅作历史参考，不保留。
 
 ### 3.7 路由与类型
 
@@ -185,8 +183,8 @@ Vite 当前把 `/api` 代理到 `https://dashscope.aliyuncs.com`，`.env` 中有
 | `src/components/Charts/ChartRecommendDialog.vue` | **删除** |
 | `src/components/DataTable/useVirtualScroll.ts` | **保留并改造**（支持远程行数、可见范围回调） |
 | `src/components/DataTable/VirtualTable.vue` | **保留并改造**（远程行、columns 驱动、固定表头） |
-| `src/components/ReportEditor/ChartEmbedExtension.ts` | **替换**为 `TableSnapshotExtension.ts` |
-| `src/components/ReportEditor/ChartEmbedNodeView.vue` | **替换**为 `TableSnapshotNodeView.vue` |
+| `src/components/ReportEditor/ChartEmbedExtension.ts` | **删除**：报告和图表均取消 |
+| `src/components/ReportEditor/ChartEmbedNodeView.vue` | **删除** |
 | `src/composables/useDrag.ts` | 可删除（仅图表拖拽使用）；如要做列宽拖拽再保留 |
 | `src/composables/useFileParse.ts` | **保留并改造**：只解析，不直接写 store；配合上传流程 |
 | `src/stores/data.ts` | **替换**为 workspace/auth/file 相关 store |
@@ -194,16 +192,16 @@ Vite 当前把 `/api` 代理到 `https://dashscope.aliyuncs.com`，`.env` 中有
 | `src/types/index.ts` | **重构**：保留 DataRow/ColumnDef 基础类型，删除 ChartConfig/ChartTransform |
 | `src/utils/datasetDB.ts` | **替换**为 `rowCache.ts`（IndexedDB 缓存）；旧 DB 可不迁移 |
 | `src/views/DataView.vue` | **重写/拆分为平台页面** |
-| `src/views/ReportEditor.vue` | **保留并改造**：删除 AI/图表侧栏，改服务端保存 + 表格快照 |
+| `src/views/ReportEditor.vue` | **删除**：报告和 PDF 功能均取消 |
 | `src/workers/excel-parser.worker.ts` | **保留并改造**：输出 ParsedSheet，不生成服务端 ID；修复类型 |
 | `src/App.vue` | 保留 `<router-view />` |
 | `src/main.ts` | 保留 Pinia + router 初始化 |
-| `src/router/index.ts` | **重写**：登录、工作空间、文件、报告、分享路由 + 守卫 |
+| `src/router/index.ts` | **重写**：登录、工作空间、文件、分享路由 + 守卫 |
 | `src/assets`、全局样式 | 按新页面调整 |
 | `.history/` | 忽略，不要修改或提交 |
 | `.env` | 删除 `VITE_DEEPSEEK_KEY`；新增后端环境变量说明 |
 | `vite.config.ts` | **修改代理**：`/api` → `http://localhost:3000`，去掉 rewrite 和 dashscope |
-| `package.json` | 删除 `echarts`；保留 xlsx/idb/TipTap/html2canvas/jsPDF 等 |
+| `package.json` | 删除 `echarts`；删除不再使用的 TipTap/html2canvas/jsPDF；保留 xlsx/idb 等 |
 | `CLAUDE.md` / `README.md` | **重写**为新架构说明 |
 
 ### 3.9 已知问题 / 技术债
@@ -226,22 +224,27 @@ Vite 当前把 `/api` 代理到 `https://dashscope.aliyuncs.com`，`.env` 中有
 
 **DataSheet — 团队数据表格协作平台**
 
-一句话：团队把 Excel/CSV 上传到工作空间，在线查看、搜索、排序和评论数据；通过分享链接把某张表只读展示给外部；基于表格数据撰写带「数据快照」的分析报告并导出 PDF。
+一句话：团队把 Excel/CSV 上传到工作空间，在线查看、搜索、排序、评论和协同编辑数据；owner 可把当前修改保留为新版本，通过分享链接把某张表只读展示给外部。
 
 ### 4.1 角色与权限
 
 工作空间角色：
 
-| 角色 | 查看 | 编辑单元格 | 评论 | 上传新版本 | 管理成员/文件 |
+| 角色 | 查看 | 编辑单元格 | 评论 | 保留版本 | 管理成员/文件 |
 |---|---|---|---|---|---|
 | owner | ✅ | ✅ | ✅ | ✅ | ✅ |
-| editor | ✅ | ✅ | ✅ | ✅ | ❌ |
+| editor | ✅ | ✅ | ✅ | ❌ | ❌ |
 | commenter | ✅ | ❌ | ✅ | ❌ | ❌ |
 | viewer | ✅ | ❌ | ❌ | ❌ | ❌ |
 
+- 首次上传文件版本：owner/editor。
+- 所有 ready 版本都可编辑。
+- 只有 owner 可以从任意版本点击“保留版本”生成新版本。
+- 保留成功后，源版本的草稿清空，源版本恢复为基础数据；新版本记录 `baseVersionId`。
+
 分享链接角色（v1）：
 
-- `viewer`：匿名只读，可看表格，不能评论、不能上传。
+- `viewer`：匿名只读，可看表格，不能评论、不能编辑。
 - 后续可扩展 `commenter`（需登录）。
 
 注册时自动创建一个个人工作空间，用户是 owner。
@@ -258,18 +261,12 @@ Vite 当前把 `/api` 代理到 `https://dashscope.aliyuncs.com`，`.env` 中有
    - 服务端搜索（关键字）与按列排序
    - 单元格编辑（owner/editor）
    - WebSocket 实时同步、在线用户与光标
-   - 版本选择；旧版本只读
+   - 版本选择；所有 ready 版本可编辑
    - 行级评论入口
 6. **评论**：对某行创建评论、列表、标记解决；按版本隔离；侧边栏展示。
-7. **分享**：为文件创建只读分享链接（可设过期天数）；公开路由 `/s/:token` 跨设备可访问；服务端校验 token 和过期时间。
-8. **版本历史**：上传新版本；版本列表；查看旧版本表格；版本 diff 放 Phase 4。
-9. **报告**：
-   - 工作空间/文件下创建、编辑、删除报告
-   - TipTap 富文本编辑（标题、列表、引用、表格等）
-   - 插入「表格快照」节点：从当前版本取前 10/20/50 行 + 列 + 排序信息，冻结进报告
-   - 防抖自动保存到服务端
-   - 导出 PDF（沿用 html2canvas + jsPDF，多页）
-10. **基础运营**：种子账号、示例工作空间、错误提示、加载态。
+7. **分享（暂缓）**：为文件创建只读分享链接（可设过期天数）；公开路由 `/s/:token` 跨设备可访问；服务端校验 token 和过期时间。和外链编辑一起做。
+8. **版本历史**：第一版通过 Excel 上传；所有 ready 版本可编辑；owner 可从任意版本点击“保留版本”把该版本的草稿提交为新版本；版本历史允许分叉并记录 `baseVersionId`；版本 diff 放 Phase 4。
+9. **基础运营**：种子账号、示例工作空间、错误提示、加载态。
 
 ### 4.3 明确不做（v1 非目标）
 
@@ -281,6 +278,8 @@ Vite 当前把 `/api` 代理到 `https://dashscope.aliyuncs.com`，`.env` 中有
 - ❌ 微服务、Redis、消息队列
 - ❌ 完整回收站、标签、活动日志、通知（可后续）
 - ❌ 分享链接匿名评论（v1 只读）
+- ❌ 报告列表/报告 CRUD/TipTap 报告编辑器
+- ❌ 表格快照、PDF 导出
 - ❌ 后端解析 Excel（v1 保持前端 Worker 解析）
 
 ---
@@ -296,10 +295,8 @@ Vite 当前把 `/api` 代理到 `https://dashscope.aliyuncs.com`，`.env` 中有
 - Vue 3 + Vite 7 + TypeScript
 - Pinia（auth 可持久化 token；业务数据不持久化）
 - Element Plus（自动导入）
-- TipTap 3
 - `xlsx` + Web Worker
 - `idb`（缓存）
-- `html2canvas` + `jsPDF`
 - vue-router
 
 删除：`echarts`、AI 相关代码。
@@ -310,10 +307,10 @@ Vite 当前把 `/api` 代理到 `https://dashscope.aliyuncs.com`，`.env` 中有
 - **MySQL 8.0+**（真实数据库；用 `mysql2/promise` 连接池 + 参数化 SQL，不引入 ORM）
 - **jsonwebtoken + bcryptjs**（纯 JS 密码哈希，避免 Windows 下 bcrypt 原生编译问题；哈希与 Java BCrypt 兼容）
 - **手写校验函数 + 统一错误处理中间件**（不引入 Nest 的 DTO/Guard；用 Express middleware 实现认证和角色校验）
-- 分片 JSON 存本地文件系统 `server/storage/`；文件/版本/评论/分享/报告元数据存 MySQL
+- 分片 JSON 存本地文件系统 `server/storage/`；文件/版本/评论/分享元数据存 MySQL
 - 端口 3000；所有接口前缀 `/api`
 
-> 数据库是必需的：账号、工作空间、成员、文件版本、评论、分享链接、报告都需要跨设备持久化，不能放浏览器。
+> 数据库是必需的：账号、工作空间、成员、文件版本、评论、分享链接都需要跨设备持久化，不能放浏览器。
 > 选择 Express + 原生 SQL 是为了匹配你已有的 Node/Express 基础，同时保持表结构简单，方便之后用 Java/JDBC/MyBatis 重写。
 > 开发期可以用本机 MySQL、XAMPP/WAMP 的 MySQL，或者 Docker 起一个 MySQL 8 容器。
 
@@ -323,13 +320,12 @@ Vite 当前把 `/api` 代理到 `https://dashscope.aliyuncs.com`，`.env` 中有
 /
 ├── src/                     # Vue 前端
 │   ├── api/http.ts          # fetch 封装：baseURL、JWT、错误归一化、401 处理
-│   ├── services/            # auth/workspace/file/comment/share/report
+│   ├── services/            # auth/workspace/file/comment/share
 │   ├── stores/              # auth.ts、workspace.ts（业务状态）
 │   ├── views/
 │   │   ├── LoginView.vue
-│   │   ├── WorkspaceView.vue      # 文件/报告列表 + 侧边栏
-│   │   ├── FileView.vue           # 表格 + 评论 + 分享 + 版本
-│   │   ├── ReportEditorView.vue   # TipTap 报告编辑器
+│   │   ├── WorkspaceView.vue      # 文件列表 + 侧边栏
+│   │   ├── FileView.vue           # 表格 + 评论 + 分享 + 版本 + 保留版本
 │   │   └── SharedFileView.vue     # /s/:token 公开只读页
 │   ├── components/
 │   │   ├── AppSidebar.vue
@@ -338,11 +334,7 @@ Vite 当前把 `/api` 代理到 `https://dashscope.aliyuncs.com`，`.env` 中有
 │   │   ├── CommentsPanel.vue
 │   │   ├── ShareDialog.vue
 │   │   ├── MembersDialog.vue
-│   │   ├── VersionSelector.vue
-│   │   └── ReportEditor/
-│   │       ├── TableSnapshotExtension.ts
-│   │       ├── TableSnapshotNodeView.vue
-│   │       └── SnapshotInsertDialog.vue
+│   │   └── VersionSelector.vue
 │   ├── workers/excel-parser.worker.ts
 │   ├── utils/rowCache.ts    # IndexedDB 缓存
 │   ├── types/api.ts         # 或 shared/api.ts
@@ -363,7 +355,7 @@ Vite 当前把 `/api` 代理到 `https://dashscope.aliyuncs.com`，`.env` 中有
 │   │   ├── app.ts           # Express app、中间件、路由挂载
 │   │   ├── db/pool.ts       # mysql2/promise 连接池
 │   │   ├── middleware/      # auth、roles、error、asyncHandler
-│   │   ├── routes/          # auth/workspaces/files/comments/shares/reports
+│   │   ├── routes/          # auth/workspaces/files/comments/shares
 │   │   ├── services/        # 业务逻辑 + SQL（每个领域一个 service）
 │   │   ├── storage/         # chunk 文件读写
 │   │   └── utils/           # jwt、password、validate、httpError
@@ -424,7 +416,9 @@ GET /api/versions/:versionId/rows?offset=&limit=&q=&sortBy=&sortDir=
 
 `rowIndex` 是**原始版本中的行号**，评论锚点用它；排序/搜索改变显示顺序时也不受影响。
 
-### 6.3 分享
+### 6.3 分享（暂缓）
+
+> 只读分享和外链编辑一起暂缓，用户有空时再做。
 
 ```
 POST /api/files/:fileId/shares { role: "viewer", expiresInDays: 7 }
@@ -442,19 +436,28 @@ POST /api/files/:fileId/shares { role: "viewer", expiresInDays: 7 }
 - 服务端校验过期时间；过期返回 410 或 404。
 - v1 不允许匿名评论。
 
-### 6.4 报告与快照
+### 6.4 版本保留
 
-- 报告内容以 TipTap JSON 存服务端（`Report.content` 字符串）。
-- 编辑器 2 秒防抖 `PATCH /api/reports/:id`。
-- 插入快照流程：
-  1. 打开 `SnapshotInsertDialog`
-  2. 选择当前文件/版本、列、排序、行数上限（10/20/50）
-  3. 调 rows API 取数据
-  4. 插入 `tableSnapshot` 节点，attrs 保存：`fileId`、`versionId`、`title`、`columns`、`sortBy`、`sortDir`、`limit`、`rows`、`totalRows`、`capturedAt`
-- 快照行数上限 50；**绝不嵌入整张表**。
-- NodeView 渲染紧凑表格 + 元信息（总行数、当前显示行数、版本、生成时间）+ 刷新/删除按钮。
-- 报告更新后数据变化时显示「数据已更新」提示，用户可点击刷新快照（重新请求并 `updateAttributes`）。
-- PDF 导出沿用现有 html2canvas + jsPDF；快照行数受限，全部在 DOM 中，不能使用虚拟滚动（否则 html2canvas 截不到屏幕外内容）。
+- 第一版仍通过 Excel 上传创建 v1。
+- v1 ready 后，不再手动上传新版本。
+- owner/editor 可以编辑任意 ready 版本；修改先写入该版本的 `cell_edits`，作为草稿。
+- owner 在任意版本点击“保留版本”：
+  1. 校验 owner、文件未删除、版本 ready、该版本 `pendingEditCount > 0`。
+  2. 对文件加锁；提交期间任何版本的新的编辑和再次保留返回 409。
+  3. 读取该版本所有 chunk rows，并叠加该版本的 `cell_edits`。
+  4. 把合并后的数据写成新版本的 chunk 文件，创建 vN+1（直接 ready）和 chunks 记录。
+  5. 记录 `base_version_id = 源版本 id`，更新 `files.latest_version_number`。
+  6. 清空源版本的 `cell_edits`，修改已进入新版本。
+  7. 向源版本房间广播 `version:created`；源版本房间的在线成员自动切到新版本。
+- 新版本的基础数据已包含草稿值，新版本自身没有 `cell_edits`。
+- 源版本恢复为基础数据，但仍可再次编辑；其他版本完全不受影响。
+- 版本历史允许分叉：
+  - 例如已有 v1、v2，修改 v1 并保留，会生成基于 v1 的 v3；v2 保留。
+  - 之后修改 v2 并保留，会生成基于 v2 的新版本。
+- owner 不点保留时，修改继续作为草稿，不产生新版本；v1 不提供“放弃更改”。
+- 评论按版本隔离，新版本不继承旧版本评论。
+- 只有 owner 能保留版本；editor 只能编辑草稿。
+- 文件详情/版本列表返回每个版本的 `pendingEditCount`。
 
 ## 7. 本地缓存（IndexedDB）
 
@@ -539,6 +542,7 @@ CREATE TABLE file_versions (
   id             VARCHAR(36) PRIMARY KEY,
   file_id        VARCHAR(36) NOT NULL,
   version_number INT         NOT NULL,
+  base_version_id VARCHAR(36) NULL, -- 保留版本的来源版本；首版为 NULL
   columns_json   JSON        NOT NULL,
   row_count      INT         NOT NULL,
   chunk_count    INT         NOT NULL,
@@ -547,6 +551,7 @@ CREATE TABLE file_versions (
   created_at     DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   UNIQUE KEY uq_file_version (file_id, version_number),
   KEY idx_versions_file (file_id),
+  KEY idx_versions_base (base_version_id),
   CONSTRAINT fk_versions_file
     FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE,
   CONSTRAINT fk_versions_creator
@@ -680,16 +685,18 @@ Authorization: Bearer <JWT>
 |---|---|---|
 | GET | `/workspaces/:id/files?q=` | 文件列表（未删除），包含最新版本摘要 |
 | POST | `/workspaces/:id/files` | 创建文件 + 第一个版本（uploading） |
-| GET | `/files/:id` | 文件详情 + 最新 ready 版本 + 版本列表 |
+| GET | `/files/:id` | 文件详情 + 最新 ready 版本 + 版本列表；每个版本含 `baseVersionId` 和 `pendingEditCount` |
 | PATCH | `/files/:id` | `{ name }`；owner/editor |
 | DELETE | `/files/:id` | 软删除；owner |
 | GET | `/files/:id/versions` | 版本列表 |
-| POST | `/files/:id/versions` | 创建新版本（uploading） |
-| PUT | `/versions/:id/chunks/:index` | `{ rows }`，每片最多 500 行 |
-| POST | `/versions/:id/complete` | `{ rowCount, chunkCount }`，校验后置 ready |
+| PUT | `/versions/:id/chunks/:index` | `{ rows }`，每片最多 500 行；仅首版上传 |
+| POST | `/versions/:id/complete` | `{ rowCount, chunkCount }`，校验后置 ready；仅首版上传 |
 | DELETE | `/versions/:id` | 取消上传中的版本 |
-| GET | `/versions/:id/rows` | 表格分页查询 |
+| POST | `/versions/:id/retain` | owner；把任意 ready 版本 + 该版本草稿物化为新的 ready 版本，并清空源版本草稿 |
+| GET | `/versions/:id/rows` | 表格分页查询（含 cell_edits 覆盖） |
 | GET | `/versions/:id/meta` | 版本元数据（可选） |
+
+> `POST /files/:id/versions` 取消：首版之后不再手动上传新版本。`POST /versions/:id/retain` 是唯一的新版本入口。
 
 创建文件/版本请求：
 
@@ -721,6 +728,29 @@ complete 时服务端校验：
 
 校验通过：`status = ready`，更新 `file.latestVersionNumber`。
 
+保留版本返回：
+
+```json
+{
+  "version": {
+    "id": "...",
+    "versionNumber": 2,
+    "baseVersionId": "源版本 id",
+    "status": "ready",
+    "rowCount": 100000,
+    "chunkCount": 200
+  },
+  "file": { "id": "...", "latestVersionNumber": 2 }
+}
+```
+
+- 仅 owner 可调用；任意 ready 版本都可以作为源版本。
+- 源版本必须有草稿；没有草稿返回 400/409。
+- 提交期间文件加锁；任何版本的新的单元格编辑/再次保留返回 409。
+- 新版本基础数据为“源版本 chunks + 源版本 cell_edits”。
+- 提交成功后清空源版本草稿，记录 `base_version_id`。
+- 成功后向源版本房间广播 `version:created`。
+
 行查询返回：
 
 ```json
@@ -745,7 +775,7 @@ complete 时服务端校验：
 
 权限：owner/editor/commenter 可创建评论；viewer 只读。
 
-## 9.5 Shares
+## 9.5 Shares（暂缓）
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -757,17 +787,9 @@ complete 时服务端校验：
 
 公开接口不要求 JWT，但要校验 token 存在、未过期、文件未删除。
 
-## 9.6 Reports
+## 9.6 Reports（已取消）
 
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| GET | `/workspaces/:id/reports` | 报告列表 |
-| POST | `/workspaces/:id/reports` | `{ title, fileId? }` |
-| GET | `/reports/:id` | 报告详情（含 TipTap JSON） |
-| PATCH | `/reports/:id` | `{ title?, content? }` |
-| DELETE | `/reports/:id` | 删除 |
-
-权限：owner/editor/commenter 可编辑；viewer 只读。
+> 2026-10-25 决定：不做报告，以下接口不实现；表格快照和 PDF 也取消。版本工作流见 6.4 和第 29 节。
 
 ---
 
@@ -782,7 +804,6 @@ complete 时服务端校验：
 /register                   LoginView（注册模式）或 RegisterView（公开）
 /workspaces/:workspaceId    WorkspaceView    （需登录）
 /files/:fileId              FileView         （需登录）
-/reports/:reportId          ReportEditorView （需登录）
 /s/:token                   SharedFileView   （公开）
 /                           → 登录后跳转第一个工作空间；未登录跳 /login
 ```
@@ -806,7 +827,7 @@ complete 时服务端校验：
 
 ### `src/services/*`
 
-按领域拆分：auth、workspace、file、comment、share、report。不要直接在页面里写 `fetch`。
+按领域拆分：auth、workspace、file、comment、share。不要直接在页面里写 `fetch`。
 
 ### `src/stores/auth.ts`
 
@@ -818,7 +839,7 @@ complete 时服务端校验：
 ### `src/stores/workspace.ts`
 
 - `workspaces`、`currentWorkspace`、`members`
-- 加载工作空间/成员；切换工作空间时清理文件/报告状态
+- 加载工作空间/成员；切换工作空间时清理文件状态
 
 > 文件列表、表格查询等页面级状态可以放视图内，不必全部塞 Pinia。
 
@@ -833,17 +854,18 @@ complete 时服务端校验：
 
 ### WorkspaceView
 
-- `AppSidebar`：工作空间切换、文件列表、报告列表、成员入口、上传按钮
+- `AppSidebar`：工作空间切换、文件列表、成员入口、上传按钮
 - 主区域：文件卡片/表格列表（名称、行数、列数、最新版本、更新时间、分享按钮）
 - 搜索框（按名称）
-- 创建报告入口
 - 成员管理弹窗（owner）：添加已注册用户、角色下拉、移除
 - 上传按钮打开 `FileUploadDialog`
 
 ### FileView
 
-- 头部：文件名、当前版本、行数/列数、分享、评论开关、报告入口
-- `VersionSelector`：切换版本；上传新版本；旧版本显示「只读」
+- 头部：文件名、当前版本、行数/列数、分享、评论开关
+- `VersionSelector`：切换版本；旧版本不再标记「只读」；保留版本显示它的 `baseVersionId` 来源
+- owner 在任意有草稿的版本看到“保留版本”按钮；editor 不显示
+- `FileUploadDialog` 只用于创建文件的第一版；首版 ready 后不再手动上传新版本
 - `RemoteVirtualTable`：
   - 固定表头
   - 按 columns 渲染
@@ -853,7 +875,7 @@ complete 时服务端校验：
   - 加载/空/错误状态
   - 行 hover 显示评论按钮和评论数
 - `CommentsPanel`：当前行/全部评论、创建、解决
-- `ShareDialog`：角色（v1 仅 viewer）、过期天数、生成链接、复制
+- `ShareDialog`（暂缓）：角色（v1 仅 viewer）、过期天数、生成链接、复制
 - 版本列表可放侧边或下拉
 
 ### SharedFileView
@@ -864,19 +886,9 @@ complete 时服务端校验：
 - 不显示评论输入、上传、版本切换
 - token 失效/过期显示友好错误页
 
-### ReportEditorView
+### ReportEditorView（已取消）
 
-- 复用现有 TipTap 配置：StarterKit、Placeholder、Table 系列、TableSnapshotExtension
-- 左侧不再是图表列表，改为：
-  - 报告信息
-  - 「插入数据快照」按钮（打开 SnapshotInsertDialog）
-  - 当前文件/版本摘要
-- 工具栏保留现有按钮（加粗、斜体、标题、列表、引用、分割线、撤销/重做）
-- 保存：
-  - `editor.on('update')` 防抖 2 秒 `PATCH /reports/:id`
-  - 显示「保存中/已保存/保存失败」
-- PDF 导出：沿用现有 `exportPDF`，把选择器改成报告内容容器；快照行数受限，确保 DOM 完整
-- 删除 AI 生成、重新生成、图表侧栏、loading overlay 中的 AI 文案
+> 2026-10-25 决定：不做报告编辑器和 PDF。`src/views/ReportEditor.vue` 作为遗留文件待清理；版本工作流见 6.4 和第 29 节。
 
 ## 13. 远程虚拟表格改造
 
@@ -937,7 +949,9 @@ complete 时服务端校验：
 - 切换版本时评论列表按新 versionId 重新加载
 - 过滤/排序改变显示顺序时，仍用原始 `rowIndex` 关联评论
 
-## 16. 分享
+## 16. 分享（暂缓）
+
+> 只读分享和外链编辑一起暂缓。
 
 - `ShareDialog`：选择过期天数（7/30/永久）、生成
 - 生成后展示完整 URL + 复制按钮
@@ -945,31 +959,9 @@ complete 时服务端校验：
 - 公开页不加载 auth store；HTTP 层用 `auth: false`
 - 服务端负责权限和过期校验，前端只展示错误
 
-## 17. 报告快照节点
+## 17. 报告快照节点（已取消）
 
-> **v1 决策（2026-10-24）：采用方案 A。** 报告内插入普通 TipTap 表格作为数据快照，不实现自定义 Extension；以下 `TableSnapshotExtension` + NodeView + 刷新快照设计延后到项目收尾后，作为可选增强。
-
-实现 `TableSnapshotExtension`，参考现有 `ChartEmbedExtension` 的写法：
-
-```ts
-Node.create({
-  name: 'tableSnapshot',
-  group: 'block',
-  atom: true,
-  draggable: true,
-  addAttributes() { /* fileId, versionId, title, columns, sortBy, sortDir, limit, rows, totalRows, capturedAt */ },
-  parseHTML() { return [{ tag: 'div[data-table-snapshot]' }]; },
-  renderHTML({ HTMLAttributes }) { /* 静态占位表格 + data-* */ },
-  addNodeView() { return VueNodeViewRenderer(TableSnapshotNodeView); },
-})
-```
-
-- `rows` 是小数组（≤50 行），直接存进节点 attrs，保证报告可复现。
-- NodeView 用 `node.attrs.rows` 渲染小表格；`updateAttributes` 刷新快照；`deleteNode` 删除。
-- 头部显示：标题、版本、总行数、显示行数、生成时间。
-- 插入弹窗最多 50 行，默认 20；超过提示「只插入前 N 行，完整数据请查看表格」。
-- PDF 截图时所有快照行都在 DOM 中，不能对快照使用虚拟滚动。
-- 删除旧 `ChartEmbed*` 文件与相关 CSS/imports。
+> **2026-10-25 决定：不做报告、快照和 PDF，也不实现 `tableSnapshot` 自定义节点。** 版本工作流见 6.4 和第 29 节。
 
 ## 18. 清理项与依赖
 
@@ -1016,15 +1008,13 @@ server/src/
 │   ├── workspaces.routes.ts
 │   ├── files.routes.ts    # files / versions / chunks / rows
 │   ├── comments.routes.ts
-│   ├── shares.routes.ts   # 私有创建 + 公开 token 读取
-│   └── reports.routes.ts
+│   └── shares.routes.ts   # 私有创建 + 公开 token 读取
 ├── services/
 │   ├── auth.service.ts
 │   ├── workspaces.service.ts
 │   ├── files.service.ts
 │   ├── comments.service.ts
-│   ├── shares.service.ts
-│   └── reports.service.ts
+│   └── shares.service.ts
 ├── storage/chunks.ts
 └── utils/
     ├── jwt.ts
@@ -1077,12 +1067,12 @@ async function assertFileAccess(userId: string, fileId: string, allowedRoles?: R
 }
 ```
 
-- 所有文件/版本/评论/报告接口先校验 workspace membership。
-- 上传新版本：owner/editor
+- 所有文件/版本/评论/分享接口先校验 workspace membership。
+- 首版上传：owner/editor
+- 保留版本：仅 owner
 - 成员管理：owner
 - 评论创建：owner/editor/commenter
-- 报告编辑：owner/editor/commenter
-- 分享创建：owner/editor
+- 分享创建：owner/editor；编辑分享链接仅 owner
 - 读取：任意成员
 - 公开分享：share token 校验，不需要 JWT
 
@@ -1250,7 +1240,7 @@ mysql -u root -p < server/sql/schema.sql
 2. 后端 files/versions/chunks/complete/rows。
 3. 上传分片、并发、进度、失败重试。
 4. 远程虚拟表格、IndexedDB 缓存、搜索、排序、固定表头。
-5. 版本列表 / 打开指定版本（只读）。
+5. 版本列表 / 打开指定版本。
 
 **验收**：上传 1 万行以上 Excel；表格可滚动、搜索、排序；刷新页面后数据从服务端恢复；切换到旧版本可查看。
 
@@ -1258,10 +1248,10 @@ mysql -u root -p < server/sql/schema.sql
 
 1. 成员管理（owner 添加已注册用户、角色）。
 2. 评论 CRUD + 侧边栏 + 行评论 badge。
-3. 分享链接创建、公开分享页、过期校验。
+3. 分享链接创建、公开分享页、过期校验（暂缓，和外链编辑一起做）。
 4. 权限校验（owner/editor/commenter/viewer）。
 
-**验收**：两个账号在同一工作空间；commenter 能评论不能上传；viewer 只读；分享链接在无痕窗口可打开；过期链接失效。
+**验收**：两个账号在同一工作空间；commenter 能评论不能上传；viewer 只读。分享链接验收暂缓。
 
 > **方向修正（2026-10-24）**：实时协同编辑优先于分享。先完成 Phase 2.5，再继续分享。
 
@@ -1271,19 +1261,47 @@ mysql -u root -p < server/sql/schema.sql
 2. `PATCH /api/versions/:versionId/cells/:rowIndex`，owner/editor，类型校验。
 3. WebSocket 鉴权、版本房间、单元格更新广播、在线用户/光标。
 4. 前端可编辑虚拟表格：双击编辑、乐观更新、防抖保存、远程更新合并。
-5. 评论/分享/版本读取覆盖后的数据；旧版本只读。
+5. 评论/版本读取覆盖后的数据；旧版本在 Phase 2.6 改为可编辑。分享功能暂缓。
 
-**验收**：两个账号打开同一版本，编辑不同单元格后实时互相可见；同一单元格后写覆盖；viewer/commenter 不能编辑；分享页显示编辑后的数据。
+**验收**：两个账号打开同一版本，编辑不同单元格后实时互相可见；同一单元格后写覆盖；viewer/commenter 不能编辑。分享页验收暂缓。
 
-### Phase 3：报告与版本
+### Phase 2.6：保留版本（新增，优先于分享）
 
-1. 报告列表/创建/编辑/删除；TipTap 保存到服务端。
-2. 报告内插入普通 TipTap 表格快照（方案 A）；`tableSnapshot` 自定义节点、NodeView、刷新快照暂缓（见第 17 节）。
-3. PDF 导出改造。
-4. 版本上传（新版本）+ 版本切换；diff 可放到 Phase 4。
-5. 文档、测试、边界处理。
+1. 第一版仍通过 Excel 上传；首版 ready 后不再手动上传新版本。
+2. 所有 ready 版本都可编辑；修改写入该版本的 `cell_edits` 草稿。
+3. owner 从任意版本点击“保留版本”：文件加锁，读取该版本 chunks + 它的 `cell_edits`，物化写入新版本 chunk 文件，创建 vN+1（ready），记录 `base_version_id`，更新 `latest_version_number`。
+4. 新版本基础数据包含该版本的草稿值；提交成功后清空源版本草稿，源版本恢复为基础数据但仍可编辑；其他版本不受影响。
+5. 未保留的修改继续作为草稿，不提供“放弃更改”。
+6. 提交期间拒绝任何版本的新编辑和再次保留；成功后向源版本房间广播 `version:created`，源版本房间的在线成员自动切到新版本。
 
-**验收**：报告自动保存；快照只显示限定行数；PDF 中快照完整；新版本上传后旧版本仍可查看；分享页显示最新 ready 版本。
+**验收**：第一版只能上传；所有版本可编辑；owner 可从任意版本保留草稿生成新版本；editor 只能编辑不能保留；保留成功后源版本草稿清空但可继续编辑；版本历史允许分叉；评论仍按版本隔离。
+
+### Phase 2.7：分享链接（只读 + 外链编辑，暂缓 / Backlog）
+
+> 暂不实现，用户有空时一起做：先做只读分享，再做外链编辑。
+
+只读分享：
+
+1. owner/editor 创建 share token，支持过期和撤销。
+2. 公开 `/s/:token` 页面，匿名只读，不接评论、编辑和 WebSocket。
+3. 公开接口只返回文件、最新 ready 版本、列和行数据，不泄露工作空间其他数据。
+
+外链编辑：
+
+1. `shares.role` 支持 `editor`；仅 owner 可创建编辑链接，支持过期和撤销。
+2. `POST /api/shares/:token/join`：登录用户校验 token 后加入工作空间为 editor。
+3. `/s/:token`：匿名可只读预览；登录/注册后回跳并加入，成功跳转文件页。
+4. 加入后编辑和 WebSocket 复用现有成员权限，不做匿名写。
+
+**验收**：只读链接在无痕窗口可访问且过期失效；新账号通过编辑链接注册并加入工作空间后可编辑；已有成员角色不被链接修改；过期/撤销链接不能加入；加入后在线用户、光标、单元格更新正常。
+
+### Phase 3：清理与收尾
+
+1. 删除报告、TipTap、快照、PDF 相关遗留文件、路由、依赖。
+2. 文档、测试、边界处理。
+3. 真实数据量和权限回归验证。
+
+**验收**：无报告/快照/PDF 入口和依赖；现有上传、版本、评论、分享、实时协同、保留版本正常。
 
 ### Phase 4（可选）
 
@@ -1308,11 +1326,17 @@ mysql -u root -p < server/sql/schema.sql
 - [ ] 10 万行以内表格可滚动，滚动不一次性加载全部数据
 - [ ] 搜索、排序结果正确，分页 total 正确
 - [ ] 刷新页面后表格数据来自服务端
-- [ ] 上传新版本，版本列表正确，旧版本只读
+- [ ] 第一版通过 Excel 上传；首版 ready 后不能手动上传新版本
+- [ ] owner 点击“保留版本”生成新版本；editor 不能保留
+- [ ] 任意 ready 版本都可编辑，包括旧版本
+- [ ] 保留成功后源版本草稿清空、恢复为基础数据，但仍可继续编辑
+- [ ] 新版本基础数据包含源版本 + 源版本草稿；版本历史允许分叉并记录 baseVersionId
+- [ ] 未保留的修改继续作为草稿
+- [ ] 保留期间新的编辑被拒绝；成功后在线成员切到新版本
 - [ ] 行评论创建/展示/解决；切换版本评论隔离
-- [ ] 分享链接跨设备/无痕可访问；过期失效；只读
-- [ ] 报告创建/编辑/自动保存/重新打开
-- [ ] 插入 10/20/50 行快照，PDF 完整显示
+- [ ] （暂缓/Backlog）只读分享链接：跨设备/无痕可访问；过期失效；只读
+- [ ] （暂缓/Backlog）编辑分享链接：登录/注册后加入工作空间并可实时编辑
+- [ ] 无报告、快照、PDF 入口、API 和持久化
 - [ ] 无 AI、无图表、无 ECharts 依赖与入口
 
 ### 技术
@@ -1323,7 +1347,8 @@ mysql -u root -p < server/sql/schema.sql
 - [ ] JWT 密钥/数据库连接在环境变量，不提交
 - [ ] 分片上传可重试；complete 校验完整性
 - [ ] 公开分享接口不泄露工作空间其他数据
-- [ ] 权限校验覆盖文件/版本/评论/分享/报告
+- [ ] 权限校验覆盖文件/版本/评论/分享
+- [ ] 保留版本写入新 chunk 文件；失败时清理临时文件
 - [ ] README/CLAUDE.md 更新
 
 ---
@@ -1339,8 +1364,8 @@ mysql -u root -p < server/sql/schema.sql
    - 分片上传 + 服务端 chunk 存储
    - 虚拟滚动（远程数据）
    - IndexedDB 本地缓存
-   - TipTap 自定义 atom 节点 + NodeView
-   - html2canvas + jsPDF 动态导入、多页导出
+   - 单元格实时协同
+   - owner 保留版本（草稿物化为新版本）
 4. **API 契约优先**：前端只通过 `src/api/http.ts` + `services/` 访问后端；不要在组件里散落 `fetch`。
 5. **Java 迁移友好**：
    - RESTful，不使用 GraphQL/tRPC
@@ -1368,10 +1393,13 @@ mysql -u root -p < server/sql/schema.sql
 - 无权限访问文件：403 或 404
 - 分享过期：410 或 404，前端友好提示
 - 搜索/排序参数非法：400
-- 报告 JSON 过大：限制请求体大小
 - CSV 编码/日期：沿用 SheetJS 输出，不做额外转换
 - 删除文件后分享链接：不可访问（deletedAt 过滤）
-- 删除文件后报告快照：仍可显示（快照行已存在节点 attrs）
+- 没有草稿时点击“保留版本”：400/409
+- 非 owner 保留版本：403
+- 源版本不是 ready：409
+- 保留进行中：新的单元格编辑/再次保留 409
+- 保留写盘失败：清理新版本目录和临时记录
 - 切换版本时清空评论/表格缓存状态
 - 组件卸载时取消未完成请求（AbortController）
 - 并发上传时避免重复创建 version
@@ -1405,7 +1433,7 @@ pnpm dev             # http://localhost:5173，/api 代理到 3000
 
 ## 25. 一句话给实现 Claude
 
-> 先读 `REFACTOR_PLAN.md` 和现有代码。删除所有 AI/图表功能；保留 Worker 解析、分片、虚拟滚动、IndexedDB 缓存、TipTap 自定义节点、PDF 导出；用 Express + MySQL（`mysql2` 参数化 SQL，不用 ORM）实现真实后端；按 Phase 0 → 3 逐步交付一个可登录、可上传、可分享、可评论、可写报告的云端表格协作平台。每个阶段结束运行 `pnpm type-check`，不要提交 `.env`、数据库和 `storage` 文件。
+> 先读 `REFACTOR_PLAN.md` 和现有代码。删除所有 AI/图表/报告/快照/PDF 功能；保留 Worker 解析、分片、虚拟滚动、IndexedDB 缓存；用 Express + MySQL（`mysql2` 参数化 SQL，不用 ORM）实现真实后端；按 Phase 0 → 3 逐步交付一个可登录、可上传、可分享、可评论、可实时协同编辑、owner 可保留版本的云端表格协作平台。每个阶段结束运行 `pnpm type-check`，不要提交 `.env`、数据库和 `storage` 文件。
 
 ## 26. 协作与验收约定（用户要求，最高优先级）
 
@@ -1417,7 +1445,7 @@ pnpm dev             # http://localhost:5173，/api 代理到 3000
    TOKEN=$(curl -sS --noproxy '*' -X POST "$BASE/auth/login" -H 'Content-Type: application/json' -d '{"email":"auth-test@example.com","password":"demo1234"}' | grep -o '"token":"[^"]*"' | cut -d'"' -f4)
    ```
    不要使用 `node -e` 解析 token；在该环境下未成功。
-5. **测试数据必须清理。** 因测试新建的账号、工作空间、文件、评论、分享、报告等，测试完成后必须删除；只有后续开发确实需要的才保留。测试账号统一使用 `auth-test@example.com`，测试后用 SQL 删除对应工作空间和用户。
+5. **测试数据必须清理。** 因测试新建的账号、工作空间、文件、评论、分享等，测试完成后必须删除；只有后续开发确实需要的才保留。测试账号统一使用 `auth-test@example.com`，测试后用 SQL 删除对应工作空间和用户。
 6. **输出格式固定为：开工前先列文件清单和职责，完成后逐文件说明实际改动。** 格式见第 27 节。
 
 ## 27. 每格输出格式（固定）
@@ -1500,9 +1528,8 @@ pnpm dev             # http://localhost:5173，/api 代理到 3000
 
 ### 28.1 v1 范围
 
-- owner/editor 可编辑**最新 ready 版本**的单元格。
+- owner/editor 可编辑**任意 ready 版本**的单元格（Phase 2.6 起）。
 - commenter/viewer 只读。
-- 旧版本只读。
 - WebSocket 实时同步；同一单元格采用 last-write-wins。
 - 不做字符级 OT/CRDT、公式、行列插入/删除（暂缓）。
 
@@ -1554,7 +1581,7 @@ Body：
 规则：
 
 - owner/editor。
-- 版本必须是文件最新的 ready 版本；旧版本 409。
+- 版本必须是 ready；任意版本都可以编辑，不要求是最新版本。
 - 文件未软删除。
 - rowIndex 在 `[0, row_count - 1]`。
 - columnKey 在版本 columns 中。
@@ -1571,18 +1598,90 @@ Body：
 - 校验用户对版本所属工作空间有访问权限。
 - 事件：
   - `cell:update`：广播单元格新值、revision、编辑者。
+  - `version:created`：owner 保留版本后，通知源版本房间成员切换到新版本；其他版本房间不受影响。
   - `presence:join` / `presence:leave`
   - `presence:cursor`：在线用户当前行/列。
+  - `cursor:clear`：用户结束编辑后，其他人移除该用户光标。
 - 同一单元格同时编辑按 last-write-wins；前端以服务端返回的 revision 为准。
 
 ### 28.5 与现有功能
 
 - 评论仍锚定原始 `rowIndex`，单元格编辑不改变行号。
-- 分享页、报告快照读取覆盖后的最新版本数据。
-- 新版本上传会建立新的基础数据；旧版本编辑冻结。
+- 分享功能暂缓；实现后分享页读取覆盖后的最新版本数据。
+- 保留版本会把草稿物化为新的基础数据，并清空源版本草稿；源版本恢复为基础数据但仍可编辑。
 - 前端 IndexedDB 行缓存需要按编辑更新或失效。
 - 可编辑表格仍使用虚拟滚动；只渲染可见行。
 
 ### 28.6 优先级
 
-先完成 Phase 2.5 的“可编辑表格 + WebSocket 实时同步”，再继续分享和 Phase 3 报告。
+先完成 Phase 2.5 的“可编辑表格 + WebSocket 实时同步”并做双浏览器验收，再完成 Phase 2.6 保留版本，最后做 Phase 3 清理与收尾。Phase 2.7 分享链接（只读 + 外链编辑）暂缓，不排期。
+
+### 28.7 分享链接方案（Phase 2.7，只读 + 外链编辑，暂缓 / Backlog）
+
+确定方案：**分享链接 + 登录/注册后加入工作空间**，不做匿名可写。
+
+规则：
+
+- 只读链接保持匿名只读。
+- 编辑链接 `role = editor`；仅 owner 可创建，支持过期和撤销。
+- 匿名打开编辑链接：显示文件只读预览和登录/注册入口。
+- 登录/注册后携带 token 调用 join；服务端校验 token、过期时间、文件未删除，将用户加入工作空间为 editor，返回 `fileId`。
+- 已是成员时保持原角色；角色不足则提示联系 owner，不通过链接自动升降级。
+- 加入后编辑和 WebSocket 使用现有成员权限，share token 不进入 PATCH / WS。
+- `cell_edits.updated_by_id` 仍是真实用户，不做匿名身份。
+- 注意：加入工作空间意味着能访问该工作空间全部文件。编辑链接只适合工作空间级外部协作；单文件外部协作仍用只读分享。
+
+接口：
+
+```http
+POST /api/shares/:token/join   （需要登录）
+→ { workspaceId, fileId, role }
+```
+
+前端：
+
+- `/s/:token` 区分只读链接和编辑链接。
+- 登录/注册页保留 `redirect=/s/:token`。
+- join 成功后跳转 `/files/:fileId`。
+
+## 29. 方向修正：取消快照/PDF，新增保留版本（2026-10-25）
+
+本节取代此前所有报告、快照、PDF 相关设计（6.4 旧内容、9.6、12 的 ReportEditorView、17、Phase 3 旧条目）。
+
+### 29.1 取消的功能
+
+- 不做报告列表、报告 CRUD、TipTap 报告编辑器、服务端报告保存。
+- 不做表格快照预览。
+- 不做 PDF 导出。
+- 不做 `tableSnapshot` 自定义节点和 NodeView。
+- `reports` 表暂不使用，后续可删除。
+- Phase 3 改为清理与收尾；删除 `ReportEditor.vue` 及 TipTap/html2canvas/jsPDF 等不再使用的依赖。
+
+### 29.2 新版本工作流
+
+- 第一版仍通过 Excel 上传创建 v1。
+- v1 ready 后，不再手动上传新版本。
+- 所有 ready 版本都可编辑；owner/editor 的修改写入该版本的 `cell_edits`，作为草稿。
+- owner 从任意版本点击“保留版本”：
+  1. 校验 owner、文件未删除、源版本 ready、源版本有草稿。
+  2. 文件加锁；提交期间任何版本的新的编辑/再次保留返回 409。
+  3. 读取源版本 chunks + 该版本的 `cell_edits`，按行覆盖。
+  4. 写入新版本 chunk 文件，创建 vN+1（ready），记录 `base_version_id`，更新 `latest_version_number`。
+  5. 清空源版本草稿；源版本恢复为基础数据但仍可编辑，其他版本不受影响。
+  6. 向源版本房间广播 `version:created`；源版本房间的在线成员自动切到新版本。
+- 新版本基础数据包含草稿值，新版本自身没有 `cell_edits`。
+- 版本历史允许分叉：v1、v2 后修改 v1 并保留，生成基于 v1 的 v3；v2 保留。
+- 未保留的修改继续作为草稿；v1 不提供“放弃更改”。
+- 评论按版本隔离，新版本不继承旧评论。
+- 只有 owner 可以保留版本；editor 只能编辑草稿。
+- 版本列表返回每个版本的 `baseVersionId` 和 `pendingEditCount`。
+- 接口：`POST /api/versions/:versionId/retain`。
+
+### 29.3 验收
+
+1. 第一版只能通过上传创建；首版后无“上传新版本”入口。
+2. owner 能把草稿保留为 v2；editor 不能保留。
+3. 保留成功后源版本草稿清空并恢复为基础数据，但仍可继续编辑；新版本基础数据包含源版本 + 草稿。
+4. 未保留的修改继续作为草稿。
+5. 保留期间新的编辑被拒绝；成功后在线成员自动切到新版本。
+6. 无报告/快照/PDF 入口、API 和依赖。

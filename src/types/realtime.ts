@@ -39,10 +39,15 @@ interface ClientCursorMessage {
   columnKey: string | null;
 }
 
+interface ClientCursorClearMessage {
+  type: "cursor:clear";
+}
+
 type ClientMessage =
   | ClientJoinMessage
   | ClientLeaveMessage
-  | ClientCursorMessage;
+  | ClientCursorMessage
+  | ClientCursorClearMessage;
 
 interface ServerJoinedMessage {
   type: "joined";
@@ -64,6 +69,12 @@ interface ServerCursorMessage {
   columnKey: string | null;
 }
 
+interface ServerCursorClearMessage {
+  type: "cursor:clear";
+  versionId: string;
+  user: RealtimeUser;
+}
+
 interface ServerCellUpdateMessage {
   type: "cell:update";
   versionId: string;
@@ -80,6 +91,7 @@ type ServerMessage =
   | ServerJoinedMessage
   | ServerPresenceMessage
   | ServerCursorMessage
+  | ServerCursorClearMessage
   | ServerCellUpdateMessage
   | ServerErrorMessage;
 
@@ -92,10 +104,12 @@ export type {
   ClientJoinMessage,
   ClientLeaveMessage,
   ClientCursorMessage,
+  ClientCursorClearMessage,
   ServerMessage,
   ServerJoinedMessage,
   ServerPresenceMessage,
   ServerCursorMessage,
+  ServerCursorClearMessage,
   ServerCellUpdateMessage,
   ServerErrorMessage,
 };

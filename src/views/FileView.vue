@@ -6,6 +6,7 @@ import CommentsPanel from "@/components/CommentsPanel.vue";
 import RemoteVirtualTable from "@/components/DataTable/RemoteVirtualTable.vue";
 import FileUploadDialog from "@/components/FileUploadDialog.vue";
 import VersionSelector from "@/components/VersionSelector.vue";
+import { useRealtime } from "@/composables/useRealtime";
 import {
   createComment,
   deleteComment as deleteCommentRequest,
@@ -15,6 +16,7 @@ import {
 import { getFileDetail } from "@/services/files";
 import { useAuthStore } from "@/stores/auth";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { getUserColor, getUserInitial } from "@/utils/userColor";
 import type { FileDetailResponse, RowComment } from "@/types/api";
 
 const route = useRoute();
@@ -32,6 +34,7 @@ const sortBy = ref<string | null>(null);
 const sortDir = ref<"asc" | "desc">("asc");
 const selectedVersionId = ref("");
 const uploadOpen = ref(false);
+const tableRef = ref<InstanceType<typeof RemoteVirtualTable> | null>(null);
 
 const comments = ref<RowComment[]>([]);
 const commentsLoading = ref(false);
@@ -135,6 +138,51 @@ const sortLabel = computed(() => {
   return column?.label ?? sortBy.value;
 });
 
+const {
+  connected: realtimeConnected,
+  joined: realtimeJoined,
+  presence,
+  cursors,
+  error: realtimeError,
+  sendCursor,
+  clearCursor,
+} = useRealtime(
+  () => selectedVersion.value?.id ?? null,
+  {
+    onCellUpdate: (update) => {
+      tableRef.value?.applyCellUpdate(update.cell);
+    },
+  }
+);
+
+const visiblePresence = computed(() => presence.value.slice(0, 5));
+
+const extraOnlineCount = computed(() =>
+  Math.max(0, presence.value.length - 5)
+);
+
+const realtimeStatus = computed(() => {
+  if (realtimeError.value) {
+    return "error";
+  }
+
+  return realtimeJoined.value ? "online" : "waiting";
+});
+
+const realtimeLabel = computed(() => {
+  if (realtimeError.value) {
+    return "实时连接异常";
+  }
+  if (realtimeJoined.value) {
+    return `在线 ${presence.value.length}`;
+  }
+  if (realtimeConnected.value) {
+    return "加入中...";
+  }
+
+  return selectedVersion.value ? "连接中..." : "";
+});
+
 function resetQuery(): void {
   if (searchTimer !== undefined) {
     window.clearTimeout(searchTimer);
@@ -178,6 +226,17 @@ function handleSortChange(payload: {
 }): void {
   sortBy.value = payload.sortBy;
   sortDir.value = payload.sortDir;
+}
+
+function handleCursorChange(payload: {
+  rowIndex: number;
+  columnKey: string | null;
+}): void {
+  sendCursor(payload.rowIndex, payload.columnKey);
+}
+
+function handleCursorClear(): void {
+  clearCursor();
 }
 
 function handleVersionChange(versionId: string): void {
@@ -422,6 +481,35 @@ watch(
           </div>
 
           <div class="header-actions">
+            <div
+              v-if="selectedVersion"
+              class="realtime-status"
+              :title="realtimeError || undefined"
+            >
+              <span
+                class="realtime-dot"
+                :class="realtimeStatus"
+              ></span>
+              <span class="realtime-label">{{ realtimeLabel }}</span>
+              <div v-if="presence.length > 0" class="online-avatars">
+                <span
+                  v-for="user in visiblePresence"
+                  :key="user.userId"
+                  class="online-avatar"
+                  :style="{ backgroundColor: getUserColor(user.userId) }"
+                  :title="
+                    user.userId === currentUserId
+                      ? `${user.name}（你）`
+                      : user.name
+                  "
+                >
+                  {{ getUserInitial(user.name) }}
+                </span>
+                <span v-if="extraOnlineCount > 0" class="online-more">
+                  +{{ extraOnlineCount }}
+                </span>
+              </div>
+            </div>
             <VersionSelector
               v-if="latestVersion"
               :versions="detail.versions"
@@ -466,6 +554,7 @@ watch(
 
           <!-- LIGHT 虚拟滚动 -->
           <RemoteVirtualTable
+            ref="tableRef"
             :key="selectedVersion.id"
             :version-id="selectedVersion.id"
             :columns="columns"
@@ -475,8 +564,11 @@ watch(
             :sort-dir="sortDir"
             :comment-counts="commentCounts"
             :editable="canEdit"
+            :cursors="cursors"
             @sort-change="handleSortChange"
             @row-comment="handleRowComment"
+            @cursor-change="handleCursorChange"
+            @cursor-clear="handleCursorClear"
           />
         </template>
       </template>
@@ -639,6 +731,76 @@ watch(
   align-items: center;
   gap: 12px;
   flex-shrink: 0;
+}
+
+.realtime-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.realtime-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #e6a23c;
+}
+
+.realtime-dot.online {
+  background: #67c23a;
+}
+
+.realtime-dot.error {
+  background: #f56c6c;
+}
+
+.realtime-label {
+  color: #8a7355;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.online-avatars {
+  display: flex;
+  align-items: center;
+  margin-left: 2px;
+}
+
+.online-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-left: -6px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.online-avatar:first-child {
+  margin-left: 0;
+}
+
+.online-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  margin-left: -6px;
+  padding: 0 5px;
+  box-sizing: border-box;
+  border: 2px solid #fff;
+  border-radius: 999px;
+  background: #e9e1d6;
+  color: #8a7355;
+  font-size: 10px;
+  font-weight: 700;
 }
 
 .upload-version-btn {

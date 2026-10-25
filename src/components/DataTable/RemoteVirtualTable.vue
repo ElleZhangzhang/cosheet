@@ -9,8 +9,10 @@ import {
 } from "vue";
 import { useRemoteRows } from "@/composables/useRemoteRows";
 import { updateVersionCell } from "@/services/versions";
+import { getUserColor } from "@/utils/userColor";
 import type { ColumnDef } from "@/types";
 import type { VersionRow } from "@/types/api";
+import type { RealtimeCursor } from "@/types/realtime";
 
 const ROW_HEIGHT = 51;
 const BUFFER = 10;
@@ -26,6 +28,7 @@ const props = defineProps<{
   sortDir: "asc" | "desc";
   commentCounts?: Map<number, number>;
   editable?: boolean;
+  cursors?: Map<string, RealtimeCursor>;
 }>();
 
 const emit = defineEmits<{
@@ -34,6 +37,11 @@ const emit = defineEmits<{
     payload: { sortBy: string; sortDir: "asc" | "desc" }
   ): void;
   (e: "row-comment", rowIndex: number): void;
+  (
+    e: "cursor-change",
+    payload: { rowIndex: number; columnKey: string | null }
+  ): void;
+  (e: "cursor-clear"): void;
 }>();
 
 const { total, loading, error, loadRange, getRow, refresh, applyCellUpdate } =
@@ -54,6 +62,11 @@ interface VisibleRow {
 interface EditingCell {
   index: number;
   columnKey: string;
+}
+
+interface CellCursorInfo {
+  names: string;
+  color: string;
 }
 
 const rootRef = ref<HTMLElement | null>(null);
@@ -89,6 +102,35 @@ const visibleRows = computed<VisibleRow[]>(() => {
 
   for (let index = visibleStart.value; index <= visibleEnd.value; index += 1) {
     result.push({ index, row: getRow(index) });
+  }
+
+  return result;
+});
+
+const cursorByCell = computed<Map<string, CellCursorInfo>>(() => {
+  const result = new Map<string, CellCursorInfo>();
+  const cursors = props.cursors;
+  if (!cursors) {
+    return result;
+  }
+
+  for (const cursor of cursors.values()) {
+    if (cursor.columnKey === null) {
+      continue;
+    }
+
+    const key = `${cursor.rowIndex}:${cursor.columnKey}`;
+    const existing = result.get(key);
+
+    if (existing) {
+      existing.names = `${existing.names}、${cursor.user.name}`;
+      continue;
+    }
+
+    result.set(key, {
+      names: cursor.user.name,
+      color: getUserColor(cursor.user.userId),
+    });
   }
 
   return result;
@@ -150,7 +192,7 @@ async function handleRefresh(): Promise<void> {
     return;
   }
 
-  cancelEdit();
+  finishEditing();
   saveError.value = "";
   await refresh();
   await nextTick();
@@ -175,6 +217,44 @@ function commentCount(rowIndex: number): number {
   return props.commentCounts?.get(rowIndex) ?? 0;
 }
 
+function cellCursor(
+  rowIndex: number | undefined,
+  columnKey: string
+): CellCursorInfo | undefined {
+  if (rowIndex === undefined) {
+    return undefined;
+  }
+
+  return cursorByCell.value.get(`${rowIndex}:${columnKey}`);
+}
+
+function cellCursorStyle(
+  rowIndex: number | undefined,
+  columnKey: string
+): Record<string, string> | undefined {
+  const cursor = cellCursor(rowIndex, columnKey);
+
+  return cursor ? { boxShadow: `inset 0 0 0 2px ${cursor.color}` } : undefined;
+}
+
+function cellTitle(item: VisibleRow, column: ColumnDef): string {
+  const value = cellText(item.row, column.keyName);
+  const cursor = cellCursor(item.row?.rowIndex, column.keyName);
+
+  return cursor ? `${value}\n${cursor.names} 正在查看` : value;
+}
+
+function handleCellClick(item: VisibleRow, column: ColumnDef): void {
+  if (!item.row) {
+    return;
+  }
+
+  emit("cursor-change", {
+    rowIndex: item.row.rowIndex,
+    columnKey: column.keyName,
+  });
+}
+
 function isEditing(index: number, columnKey: string): boolean {
   return (
     editingCell.value?.index === index &&
@@ -194,6 +274,7 @@ function startEdit(item: VisibleRow, column: ColumnDef): void {
   };
   editValue.value = cellText(item.row, column.keyName);
 
+  // 延迟获取DOM
   void nextTick(() => {
     const input = rootRef.value?.querySelector<HTMLInputElement>(".cell-input");
     input?.focus();
@@ -206,6 +287,15 @@ function cancelEdit(): void {
   editValue.value = "";
 }
 
+function finishEditing(): void {
+  if (!editingCell.value) {
+    return;
+  }
+
+  cancelEdit();
+  emit("cursor-clear");
+}
+
 async function commitEdit(item: VisibleRow): Promise<void> {
   const editing = editingCell.value;
   if (!editing || editing.index !== item.index) {
@@ -215,7 +305,7 @@ async function commitEdit(item: VisibleRow): Promise<void> {
   const row = item.row;
   const nextValue = editValue.value;
   const currentValue = row ? cellText(row, editing.columnKey) : "";
-  cancelEdit();
+  finishEditing();
 
   if (!row || nextValue === currentValue) {
     return;
@@ -262,7 +352,7 @@ watch(
     () => props.sortDir,
   ],
   async () => {
-    cancelEdit();
+    finishEditing();
     saveError.value = "";
     await nextTick();
 
@@ -278,7 +368,7 @@ watch(
   () => props.editable,
   (editable) => {
     if (!editable) {
-      cancelEdit();
+      finishEditing();
     }
   }
 );
@@ -295,6 +385,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener("resize", updateVisibleRange);
 });
+
+defineExpose({ applyCellUpdate });
 </script>
 
 <template>
@@ -397,10 +489,26 @@ onBeforeUnmount(() => {
                 :title="
                   isEditing(item.index, column.keyName)
                     ? undefined
-                    : cellText(item.row, column.keyName)
+                    : cellTitle(item, column)
                 "
+                :style="cellCursorStyle(item.row?.rowIndex, column.keyName)"
+                @click="handleCellClick(item, column)"
                 @dblclick.stop="startEdit(item, column)"
               >
+                <span
+                  v-if="cellCursor(item.row?.rowIndex, column.keyName)"
+                  class="remote-cursor-label"
+                  :style="{
+                    backgroundColor: cellCursor(
+                      item.row?.rowIndex,
+                      column.keyName
+                    )?.color,
+                  }"
+                >
+                  {{ cellCursor(item.row?.rowIndex, column.keyName)?.names }}
+                </span>
+
+                <!-- 用户双击 → 渲染单元格编辑 -->
                 <input
                   v-if="isEditing(item.index, column.keyName)"
                   v-model="editValue"
@@ -408,7 +516,7 @@ onBeforeUnmount(() => {
                   type="text"
                   @dblclick.stop
                   @keydown.enter.prevent="commitEdit(item)"
-                  @keydown.esc.prevent="cancelEdit"
+                  @keydown.esc.prevent="finishEditing"
                   @blur="commitEdit(item)"
                 />
                 <template v-else>
@@ -614,6 +722,7 @@ onBeforeUnmount(() => {
 }
 
 .table-cell {
+  position: relative;
   min-width: 0;
   padding: 0 14px;
   overflow: hidden;
@@ -621,6 +730,23 @@ onBeforeUnmount(() => {
   font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.remote-cursor-label {
+  position: absolute;
+  top: 2px;
+  right: 3px;
+  z-index: 1;
+  max-width: 70%;
+  padding: 0 4px;
+  overflow: hidden;
+  border-radius: 3px;
+  color: #fff;
+  font-size: 9px;
+  line-height: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
 }
 
 .table-cell.editable {

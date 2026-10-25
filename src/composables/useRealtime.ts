@@ -102,6 +102,17 @@ function useRealtime(
 
         cursors.set(cursor.user.userId, cursor);
       },
+      onCursorClear: (user) => {
+        if (currentGeneration !== generation) {
+          return;
+        }
+
+        if (user.userId === authStore.user?.id) {
+          return;
+        }
+
+        cursors.delete(user.userId);
+      },
       onCellUpdate: (update) => {
         if (currentGeneration !== generation) {
           return;
@@ -142,6 +153,10 @@ function useRealtime(
     client?.sendCursor(rowIndex, columnKey);
   }
 
+  function clearCursor(): void {
+    client?.clearCursor();
+  }
+
   watch(
     () => getVersionId(),
     (versionId) => {
@@ -167,6 +182,7 @@ function useRealtime(
     cursors,
     error,
     sendCursor,
+    clearCursor,
   };
 }
 

@@ -227,6 +227,29 @@ function handleCursor(
 }
 
 // 总调度台：处理前端发来的字符串，然后选用对应的处理函数
+function handleCursorClear(
+  ws: WebSocket,
+  state: SocketState
+): void {
+  if (!state.versionId) {
+    sendJson(ws, { type: "error", message: "还没有加入版本房间" });
+    return;
+  }
+
+  broadcastRoom(
+    state.versionId,
+    {
+      type: "cursor:clear",
+      versionId: state.versionId,
+      user: {
+        userId: state.userId,
+        name: state.userName,
+      },
+    },
+    ws
+  );
+}
+
 async function handleMessage(
   ws: WebSocket,
   raw: string
@@ -265,6 +288,9 @@ async function handleMessage(
         break;
       case "cursor":
         handleCursor(ws, state, message);
+        break;
+      case "cursor:clear":
+        handleCursorClear(ws, state);
         break;
       default:
         sendJson(ws, { type: "error", message: "未知消息类型" });
