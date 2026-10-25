@@ -8,6 +8,7 @@ import {
   watch,
 } from "vue";
 import { useRemoteRows } from "@/composables/useRemoteRows";
+import { updateVersionCell } from "@/services/versions";
 import type { ColumnDef } from "@/types";
 import type { VersionRow } from "@/types/api";
 
@@ -24,6 +25,7 @@ const props = defineProps<{
   sortBy: string | null;
   sortDir: "asc" | "desc";
   commentCounts?: Map<number, number>;
+  editable?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -34,18 +36,35 @@ const emit = defineEmits<{
   (e: "row-comment", rowIndex: number): void;
 }>();
 
-const { total, loading, error, loadRange, getRow, refresh } = useRemoteRows(
-  () => props.versionId,
-  () => ({
-    q: props.q,
-    sortBy: props.sortBy,
-    sortDir: props.sortDir,
-  })
-);
+const { total, loading, error, loadRange, getRow, refresh, applyCellUpdate } =
+  useRemoteRows(
+    () => props.versionId,
+    () => ({
+      q: props.q,
+      sortBy: props.sortBy,
+      sortDir: props.sortDir,
+    })
+  );
 
+interface VisibleRow {
+  index: number;
+  row: VersionRow | undefined;
+}
+
+interface EditingCell {
+  index: number;
+  columnKey: string;
+}
+
+const rootRef = ref<HTMLElement | null>(null);
 const bodyRef = ref<HTMLDivElement>();
 const visibleStart = ref(0);
 const visibleEnd = ref(-1);
+
+const editingCell = ref<EditingCell | null>(null);
+const editValue = ref("");
+const saving = ref(false);
+const saveError = ref("");
 
 const displayTotal = computed(() => total.value ?? props.rowCount);
 
@@ -65,11 +84,8 @@ const gridTemplate = computed(
       .join(" ")}`
 );
 
-const visibleRows = computed(() => {
-  const result: Array<{
-    index: number;
-    row: VersionRow | undefined;
-  }> = [];
+const visibleRows = computed<VisibleRow[]>(() => {
+  const result: VisibleRow[] = [];
 
   for (let index = visibleStart.value; index <= visibleEnd.value; index += 1) {
     result.push({ index, row: getRow(index) });
@@ -130,6 +146,12 @@ function handleSort(column: ColumnDef): void {
 }
 
 async function handleRefresh(): Promise<void> {
+  if (saving.value) {
+    return;
+  }
+
+  cancelEdit();
+  saveError.value = "";
   await refresh();
   await nextTick();
 
@@ -153,8 +175,75 @@ function commentCount(rowIndex: number): number {
   return props.commentCounts?.get(rowIndex) ?? 0;
 }
 
+function isEditing(index: number, columnKey: string): boolean {
+  return (
+    editingCell.value?.index === index &&
+    editingCell.value.columnKey === columnKey
+  );
+}
+
+function startEdit(item: VisibleRow, column: ColumnDef): void {
+  if (!props.editable || !item.row || saving.value) {
+    return;
+  }
+
+  saveError.value = "";
+  editingCell.value = {
+    index: item.index,
+    columnKey: column.keyName,
+  };
+  editValue.value = cellText(item.row, column.keyName);
+
+  void nextTick(() => {
+    const input = rootRef.value?.querySelector<HTMLInputElement>(".cell-input");
+    input?.focus();
+    input?.select();
+  });
+}
+
+function cancelEdit(): void {
+  editingCell.value = null;
+  editValue.value = "";
+}
+
+async function commitEdit(item: VisibleRow): Promise<void> {
+  const editing = editingCell.value;
+  if (!editing || editing.index !== item.index) {
+    return;
+  }
+
+  const row = item.row;
+  const nextValue = editValue.value;
+  const currentValue = row ? cellText(row, editing.columnKey) : "";
+  cancelEdit();
+
+  if (!row || nextValue === currentValue) {
+    return;
+  }
+
+  saving.value = true;
+  saveError.value = "";
+
+  try {
+    // 更新后端值
+    const data = await updateVersionCell(
+      props.versionId,
+      row.rowIndex,
+      editing.columnKey,
+      nextValue
+    );
+
+    // 更新前端内存并delete-indexedDB-versionId
+    applyCellUpdate(data.cell);
+  } catch (err) {
+    saveError.value = err instanceof Error ? err.message : "保存单元格失败";
+  } finally {
+    saving.value = false;
+  }
+}
+
 function handleRowClick(row: VersionRow | undefined): void {
-  if (!row) {
+  if (props.editable || !row) {
     return;
   }
 
@@ -173,6 +262,8 @@ watch(
     () => props.sortDir,
   ],
   async () => {
+    cancelEdit();
+    saveError.value = "";
     await nextTick();
 
     if (bodyRef.value) {
@@ -180,6 +271,15 @@ watch(
     }
 
     updateVisibleRange();
+  }
+);
+
+watch(
+  () => props.editable,
+  (editable) => {
+    if (!editable) {
+      cancelEdit();
+    }
   }
 );
 
@@ -198,11 +298,12 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="remote-table-card">
+  <section ref="rootRef" class="remote-table-card">
     <div class="remote-toolbar">
       <span>共 {{ displayTotal.toLocaleString() }} 行</span>
       <div class="toolbar-actions">
         <span v-if="loading" class="loading-text">加载中...</span>
+        <span v-if="saving" class="loading-text">保存中...</span>
         <button type="button" class="refresh-btn" @click="handleRefresh">
           刷新
         </button>
@@ -213,6 +314,13 @@ onBeforeUnmount(() => {
       <span>{{ error }}</span>
       <button type="button" class="error-retry" @click="handleRefresh">
         重试
+      </button>
+    </div>
+
+    <div v-if="saveError" class="error-banner">
+      <span>{{ saveError }}</span>
+      <button type="button" class="error-retry" @click="saveError = ''">
+        关闭
       </button>
     </div>
 
@@ -244,7 +352,7 @@ onBeforeUnmount(() => {
               v-for="item in visibleRows"
               :key="item.index"
               class="table-row"
-              :class="{ clickable: Boolean(item.row) }"
+              :class="{ clickable: Boolean(item.row) && !editable }"
               :style="{
                 transform: `translateY(${item.index * ROW_HEIGHT}px)`,
                 gridTemplateColumns: gridTemplate,
@@ -282,9 +390,30 @@ onBeforeUnmount(() => {
                 v-for="column in columns"
                 :key="column.keyName"
                 class="table-cell"
-                :title="cellText(item.row, column.keyName)"
+                :class="{
+                  editable: editable,
+                  editing: isEditing(item.index, column.keyName),
+                }"
+                :title="
+                  isEditing(item.index, column.keyName)
+                    ? undefined
+                    : cellText(item.row, column.keyName)
+                "
+                @dblclick.stop="startEdit(item, column)"
               >
-                {{ cellText(item.row, column.keyName) }}
+                <input
+                  v-if="isEditing(item.index, column.keyName)"
+                  v-model="editValue"
+                  class="cell-input"
+                  type="text"
+                  @dblclick.stop
+                  @keydown.enter.prevent="commitEdit(item)"
+                  @keydown.esc.prevent="cancelEdit"
+                  @blur="commitEdit(item)"
+                />
+                <template v-else>
+                  {{ cellText(item.row, column.keyName) }}
+                </template>
               </div>
             </div>
           </div>
@@ -492,6 +621,32 @@ onBeforeUnmount(() => {
   font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.table-cell.editable {
+  cursor: cell;
+}
+
+.table-cell.editing {
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  overflow: visible;
+}
+
+.cell-input {
+  width: 100%;
+  height: 32px;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0 7px;
+  border: 1px solid #bfa175;
+  border-radius: 5px;
+  outline: none;
+  background: #fffdf9;
+  color: #333;
+  font: inherit;
+  box-shadow: 0 0 0 2px rgba(191, 161, 117, 0.12);
 }
 
 .empty-state {

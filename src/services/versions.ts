@@ -6,6 +6,7 @@ import type {
   VersionChunksResponse,
   VersionRowsQuery,
   VersionRowsResponse,
+  UpdateVersionCellResponse,
 } from "@/types/api";
 
 function uploadChunk(
@@ -79,10 +80,26 @@ function getVersionRows(
   );
 }
 
+function updateVersionCell(
+  versionId: string,
+  rowIndex: number,
+  columnKey: string,
+  value: unknown
+): Promise<UpdateVersionCellResponse> {
+  return request<UpdateVersionCellResponse>(
+    `/versions/${versionId}/cells/${rowIndex}`,
+    {
+      method: "PATCH",
+      body: { columnKey, value },
+    }
+  );
+}
+
 export {
   uploadChunk,
   completeVersion,
   cancelVersion,
   getVersionChunks,
   getVersionRows,
+  updateVersionCell,
 };

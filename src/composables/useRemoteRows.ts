@@ -27,6 +27,18 @@ interface RemoteRowsQuery {
   sortDir: "asc" | "desc";
 }
 
+interface CellUpdate {
+  rowIndex: number;
+  columnKey: string;
+  value: unknown;
+  revision: number;
+}
+
+interface AppliedCellEdit {
+  value: unknown;
+  revision: number;
+}
+
 function normalizeQuery(query: RemoteRowsQuery): RemoteRowsQuery {
   return {
     q: query.q.trim(),
@@ -65,6 +77,9 @@ function useRemoteRows(
   const pendingOffsets = new Map<number, Promise<void>>();
   let pendingCount = 0;
 
+  // 当前版本已应用的单元格编辑；后续加载的页也要覆盖上去
+  const cellEdits = new Map<number, Map<string, AppliedCellEdit>>();
+
   function resetState(): void {
     rows.clear();
     total.value = null;
@@ -73,6 +88,18 @@ function useRemoteRows(
     loadedOffsets.clear();
     pendingOffsets.clear();
     pendingCount = 0;
+    cellEdits.clear();
+  }
+
+  function applyKnownEdits(row: VersionRow): void {
+    const rowEdits = cellEdits.get(row.rowIndex);
+    if (!rowEdits) {
+      return;
+    }
+
+    for (const [columnKey, edit] of rowEdits) {
+      row[columnKey] = edit.value;
+    }
   }
 
   // 单页加载
@@ -110,6 +137,7 @@ function useRemoteRows(
         if (cached) {
           total.value = cached.total;
           cached.rows.forEach((row, index) => {
+            applyKnownEdits(row);
             rows.set(cached.offset + index, row);
           });
           loadedOffsets.add(offset);
@@ -134,6 +162,7 @@ function useRemoteRows(
         total.value = data.total;
         data.rows.forEach((row, index) => {
           // 服务端返回的是展示顺序；rowIndex 是原始行号，不能直接当显示位置
+          applyKnownEdits(row);
           rows.set(offset + index, row);
         });
         loadedOffsets.add(offset);
@@ -248,6 +277,37 @@ function useRemoteRows(
     return rows.get(index);
   }
 
+  // 单元格保存/实时更新 → 同步已加载的行 + 失效versionId对应的行缓存
+  // OPTIMIZE 让所有的versionId都失效太过，精确到offset很不错
+  function applyCellUpdate(update: CellUpdate): void {
+    let rowEdits = cellEdits.get(update.rowIndex);
+    const existing = rowEdits?.get(update.columnKey);
+
+    if (existing && existing.revision > update.revision) {
+      return;
+    }
+
+    if (!rowEdits) {
+      rowEdits = new Map();
+      cellEdits.set(update.rowIndex, rowEdits);
+    }
+    rowEdits.set(update.columnKey, {
+      value: update.value,
+      revision: update.revision,
+    });
+
+    for (const row of rows.values()) {
+      if (row.rowIndex === update.rowIndex) {
+        row[update.columnKey] = update.value;
+      }
+    }
+
+    const versionId = getVersionId();
+    if (versionId) {
+      void clearVersionRowCache(versionId);
+    }
+  }
+
   // 当用户切换了版本，或者输入了搜索词时，说明数据源变了。此时必须清空原来的内存数据，让所有还在跑的请求作废，然后重新加载第一页
   watch(
     [
@@ -271,8 +331,9 @@ function useRemoteRows(
     loadRange,
     getRow,
     refresh,
+    applyCellUpdate,
   };
 }
 
 export { useRemoteRows, PAGE_SIZE };
-export type { RemoteRowsQuery };
+export type { RemoteRowsQuery, CellUpdate };

@@ -74,6 +74,10 @@ const canUpload = computed(() => {
   return role === "owner" || role === "editor";
 });
 
+const canEdit = computed(
+  () => canUpload.value && !isHistorical.value
+);
+
 const canComment = computed(() => {
   const role = currentRole.value;
   return (
@@ -470,6 +474,7 @@ watch(
             :sort-by="sortBy"
             :sort-dir="sortDir"
             :comment-counts="commentCounts"
+            :editable="canEdit"
             @sort-change="handleSortChange"
             @row-comment="handleRowComment"
           />

@@ -205,6 +205,21 @@ interface VersionRowsResponse {
   offset: number;
   limit: number;
 }
+
+// 单元格编辑结果
+interface VersionCell {
+  rowIndex: number;
+  columnKey: string;
+  value: unknown;
+  revision: number;
+  updatedById: string;
+  updatedByName: string;
+  updatedAt: string;
+}
+
+interface UpdateVersionCellResponse {
+  cell: VersionCell;
+}
 //#endregion
 
 //#region chunk
@@ -279,6 +294,8 @@ export type {
   VersionRow,
   VersionRowsQuery,
   VersionRowsResponse,
+  VersionCell,
+  UpdateVersionCellResponse,
   UploadChunkResponse,
   UploadedChunkInfo,
   VersionChunksResponse,
