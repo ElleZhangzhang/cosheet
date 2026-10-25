@@ -9,10 +9,20 @@ import { assertWorkspaceAccess } from "./permissions";
 
 interface VersionEditContextRow extends RowDataPacket {
   id: string;
+  file_id: string;
   status: string;
   row_count: number;
   columns_json: unknown;
   workspace_id: string;
+}
+
+interface FileLockRow extends RowDataPacket {
+  id: string;
+}
+
+interface LockedVersionRow extends RowDataPacket {
+  status: string;
+  row_count: number;
 }
 
 interface CellEditValueRow extends RowDataPacket {
@@ -152,7 +162,8 @@ export async function upsertCellEdit(
   value: unknown
 ): Promise<CellEdit> {
   const [versions] = await pool.execute<VersionEditContextRow[]>(
-    `SELECT v.id, v.status, v.row_count, v.columns_json, f.workspace_id
+    `SELECT v.id, v.file_id, v.status, v.row_count, v.columns_json,
+            f.workspace_id
      FROM file_versions v
      JOIN files f ON f.id = v.file_id
      WHERE v.id = ? AND f.deleted_at IS NULL
@@ -188,49 +199,94 @@ export async function upsertCellEdit(
   }
 
   const normalizedValue = normalizeCellValue(value, column.type);
+  const connection = await pool.getConnection();
 
-  // FIND 新编辑内容一条一条地插入cell_edits库了（旧版本的内容是不再做任何改动的，新修改全添加为新版本）
-  await pool.execute(
-    `INSERT INTO cell_edits
-     (id, version_id, row_index, column_key, value_json, revision, updated_by_id)
-     VALUES (?, ?, ?, ?, ?, 1, ?)
-     ON DUPLICATE KEY UPDATE
-       value_json = VALUES(value_json),
-       revision = revision + 1,
-       updated_by_id = VALUES(updated_by_id),
-       updated_at = CURRENT_TIMESTAMP(3)`,
-    [
-      randomUUID(),
-      versionId,
-      rowIndex,
-      columnKey,
-      JSON.stringify(normalizedValue),
-      userId,
-    ]
-  );
+  try {
+    await connection.beginTransaction();
 
-  const [rows] = await pool.execute<CellEditRow[]>(
-    `SELECT e.row_index, e.column_key, e.value_json, e.revision,
-            e.updated_by_id, u.name AS updated_by_name, e.updated_at
-     FROM cell_edits e
-     JOIN users u ON u.id = e.updated_by_id
-     WHERE e.version_id = ? AND e.row_index = ? AND e.column_key = ?
-     LIMIT 1`,
-    [versionId, rowIndex, columnKey]
-  );
-  const edit = rows[0];
+    // 防止同时编辑同一个单元格和更新丢失（体现在revision=revision+1）
+    const [fileRows] = await connection.execute<FileLockRow[]>(
+      "SELECT id FROM files WHERE id = ? AND deleted_at IS NULL FOR UPDATE",
+      [version.file_id]
+    );
+    if (!fileRows[0]) {
+      throw new HttpError(404, "文件不存在");
+    }
 
-  if (!edit) {
-    throw new Error("保存单元格后查询失败");
+    const [lockedVersions] = await connection.execute<LockedVersionRow[]>(
+      `SELECT status, row_count
+       FROM file_versions
+       WHERE id = ?
+       FOR UPDATE`,
+      [versionId]
+    );
+    const lockedVersion = lockedVersions[0];
+
+    if (!lockedVersion) {
+      throw new HttpError(404, "版本不存在");
+    }
+    if (lockedVersion.status !== "ready") {
+      throw new HttpError(409, "版本尚未完成上传");
+    }
+    if (rowIndex >= lockedVersion.row_count) {
+      throw new HttpError(400, "行索引超出范围");
+    }
+
+    await connection.execute(
+      `INSERT INTO cell_edits
+       (id, version_id, row_index, column_key, value_json, revision, updated_by_id)
+       VALUES (?, ?, ?, ?, ?, 1, ?)
+       ON DUPLICATE KEY UPDATE
+         value_json = VALUES(value_json),
+         revision = revision + 1,
+         updated_by_id = VALUES(updated_by_id),
+         updated_at = CURRENT_TIMESTAMP(3)`,
+      [
+        randomUUID(),
+        versionId,
+        rowIndex,
+        columnKey,
+        JSON.stringify(normalizedValue),
+        userId,
+      ]
+    );
+
+    const [rows] = await connection.execute<CellEditRow[]>(
+      `SELECT e.row_index, e.column_key, e.value_json, e.revision,
+              e.updated_by_id, u.name AS updated_by_name, e.updated_at
+       FROM cell_edits e
+       JOIN users u ON u.id = e.updated_by_id
+       WHERE e.version_id = ? AND e.row_index = ? AND e.column_key = ?
+       LIMIT 1`,
+      [versionId, rowIndex, columnKey]
+    );
+    const edit = rows[0];
+
+    if (!edit) {
+      throw new Error("保存单元格后查询失败");
+    }
+
+    const result: CellEdit = {
+      rowIndex: edit.row_index,
+      columnKey: edit.column_key,
+      value: edit.value_json,
+      revision: edit.revision,
+      updatedById: edit.updated_by_id,
+      updatedByName: edit.updated_by_name,
+      updatedAt: edit.updated_at,
+    };
+
+    await connection.commit();
+    return result;
+  } catch (error) {
+    try {
+      await connection.rollback();
+    } catch {
+      // 忽略回滚失败
+    }
+
+    throw error;
+  } finally {
+    connection.release();
   }
-
-  return {
-    rowIndex: edit.row_index,
-    columnKey: edit.column_key,
-    value: edit.value_json,
-    revision: edit.revision,
-    updatedById: edit.updated_by_id,
-    updatedByName: edit.updated_by_name,
-    updatedAt: edit.updated_at,
-  };
 }

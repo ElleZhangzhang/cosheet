@@ -1,7 +1,11 @@
 import { Router } from "express";
 import { asyncHandler } from "../middleware/asyncHandler";
-import { broadcastCellUpdate } from "../realtime/ws";
+import {
+  broadcastCellUpdate,
+  broadcastVersionCreated,
+} from "../realtime/ws";
 import { upsertCellEdit } from "../services/cellEdits";
+import { retainVersion } from "../services/versionRetention";
 import { getVersionRows } from "../services/versionRows";
 import {
   cancelVersion,
@@ -113,6 +117,22 @@ versionsRouter.patch(
     broadcastCellUpdate(versionId, cell);
 
     res.json({ cell });
+  })
+);
+
+// POST /api/versions/:versionId/retain
+versionsRouter.post(
+  "/:versionId/retain",
+  asyncHandler(async (req, res) => {
+    const versionId = getVersionId(req.params.versionId);
+    const result = await retainVersion(
+      getUserId(req.userId),
+      versionId
+    );
+
+    broadcastVersionCreated(versionId, result);
+
+    res.status(201).json(result);
   })
 );
 

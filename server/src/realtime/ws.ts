@@ -7,6 +7,7 @@ import { pool } from "../db/pool";
 import { getUserById } from "../services/auth";
 import type { CellEdit } from "../services/cellEdits";
 import { getWorkspaceRole } from "../services/permissions";
+import type { RetainedVersion } from "../services/versionRetention";
 import { verifyToken } from "../utils/jwt";
 
 interface SocketState {
@@ -390,5 +391,18 @@ export function broadcastCellUpdate(
       userId: cell.updatedById,
       name: cell.updatedByName,
     },
+  });
+}
+
+// owner 保留版本后，通知源版本房间成员切换到新版本
+export function broadcastVersionCreated(
+  sourceVersionId: string,
+  result: RetainedVersion
+): void {
+  broadcastRoom(sourceVersionId, {
+    type: "version:created",
+    sourceVersionId,
+    version: result.version,
+    file: result.file,
   });
 }
