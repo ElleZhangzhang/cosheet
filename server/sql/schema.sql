@@ -213,30 +213,6 @@ CREATE TABLE shares (
 
 
 -- 用于基于表格生成的数据报告
-CREATE TABLE reports (
-  id            VARCHAR(36)  PRIMARY KEY,
-  workspace_id  VARCHAR(36)  NOT NULL,
-
-  -- 关联文件
-  file_id       VARCHAR(36)  NULL,
-  title         VARCHAR(255) NOT NULL,
-
-  -- 大文本，存Markdown/HTML
-  content       LONGTEXT     NOT NULL,
-
-  created_by_id VARCHAR(36)  NOT NULL,
-  created_at    DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  updated_at    DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
-                  ON UPDATE CURRENT_TIMESTAMP(3),
-  KEY idx_reports_workspace (workspace_id),
-  CONSTRAINT fk_reports_workspace
-    FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
-  CONSTRAINT fk_reports_file
-    FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE SET NULL,
-  CONSTRAINT fk_reports_creator
-    FOREIGN KEY (created_by_id) REFERENCES users(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 -- 单元格编辑覆盖层：原始chunk保持只读，协作编辑只写这里
 CREATE TABLE cell_edits (
   id            VARCHAR(36)  PRIMARY KEY,

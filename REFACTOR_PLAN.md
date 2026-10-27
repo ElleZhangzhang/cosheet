@@ -610,32 +610,13 @@ CREATE TABLE shares (
     FOREIGN KEY (created_by_id) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE reports (
-  id            VARCHAR(36)  PRIMARY KEY,
-  workspace_id  VARCHAR(36)  NOT NULL,
-  file_id       VARCHAR(36)  NULL,
-  title         VARCHAR(255) NOT NULL,
-  content       LONGTEXT     NOT NULL,
-  created_by_id VARCHAR(36)  NOT NULL,
-  created_at    DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  updated_at    DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
-                  ON UPDATE CURRENT_TIMESTAMP(3),
-  KEY idx_reports_workspace (workspace_id),
-  CONSTRAINT fk_reports_workspace
-    FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
-  CONSTRAINT fk_reports_file
-    FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE SET NULL,
-  CONSTRAINT fk_reports_creator
-    FOREIGN KEY (created_by_id) REFERENCES users(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 ```
 
 说明：
 
 - ID 在 Node 端用 `crypto.randomUUID()` 生成，写入 `VARCHAR(36)`。
 - `columns_json` 用 MySQL `JSON`；`mysql2` 默认会把 JSON 列解析成 JS 对象，读取时仍建议做一次 `typeof === 'string' ? JSON.parse(...) : ...` 兼容处理。
-- 报告 `content` 存 TipTap JSON 字符串，用 `LONGTEXT`。
-- `files.latest_version_number` 是冗余字段，`complete` 时更新；读取最新版本时按 fileId + versionNumber 查询。
+- `files.latest_version_number` 是冗余字段，首版 `complete` 或 owner 保留版本时更新；读取最新版本时按 fileId + versionNumber 查询。
 - 删除文件采用 `deletedAt` 软删除；v1 列表过滤掉已删除。
 - 评论按 `versionId` 隔离；新版本旧评论不会自动迁移。
 - 角色/状态用 `VARCHAR(20)` 而非 ENUM，方便以后加角色，校验放在应用层。
@@ -1309,6 +1290,8 @@ mysql -u root -p < server/sql/schema.sql
 3. 文档、测试、边界处理。
 4. 真实数据量和权限回归验证。
 
+> 2026-10-25：`ReportEditor.vue`、TipTap 依赖、`reports` 表已清理；剩余文档和最终回归。
+
 **验收**：版本 Excel/PDF 可导出；无报告/快照入口和依赖；现有上传、版本、评论、实时协同、保留版本正常。
 
 ### Phase 4（可选）
@@ -1667,7 +1650,7 @@ POST /api/shares/:token/join   （需要登录）
 - 不做报告列表、报告 CRUD、TipTap 报告编辑器、服务端报告保存。
 - 不做表格快照预览。
 - 不做 `tableSnapshot` 自定义节点和 NodeView。
-- `reports` 表暂不使用，后续可删除。
+- `reports` 表已删除，报告相关代码和 TipTap 依赖已清理。
 - 保留直接版本导出 Excel/PDF；保留 xlsx/html2canvas/jsPDF 依赖。
 - Phase 3 删除 `ReportEditor.vue` 和 TipTap 依赖，保留导出依赖。
 
