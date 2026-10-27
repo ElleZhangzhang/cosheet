@@ -406,3 +406,15 @@ export function broadcastVersionCreated(
     file: result.file,
   });
 }
+
+// owner 清除草稿后，通知版本房间成员回退到基础数据
+export function broadcastCellEditsCleared(
+  versionId: string,
+  cleared: number
+): void {
+  broadcastRoom(versionId, {
+    type: "cells:cleared",
+    versionId,
+    cleared,
+  });
+}

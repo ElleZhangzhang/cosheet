@@ -1,10 +1,14 @@
 import { Router } from "express";
 import { asyncHandler } from "../middleware/asyncHandler";
 import {
+  broadcastCellEditsCleared,
   broadcastCellUpdate,
   broadcastVersionCreated,
 } from "../realtime/ws";
-import { upsertCellEdit } from "../services/cellEdits";
+import {
+  discardCellEdits,
+  upsertCellEdit,
+} from "../services/cellEdits";
 import { retainVersion } from "../services/versionRetention";
 import { getVersionRows } from "../services/versionRows";
 import {
@@ -117,6 +121,22 @@ versionsRouter.patch(
     broadcastCellUpdate(versionId, cell);
 
     res.json({ cell });
+  })
+);
+
+// DELETE /api/versions/:versionId/cells
+versionsRouter.delete(
+  "/:versionId/cells",
+  asyncHandler(async (req, res) => {
+    const versionId = getVersionId(req.params.versionId);
+    const result = await discardCellEdits(
+      getUserId(req.userId),
+      versionId
+    );
+
+    broadcastCellEditsCleared(versionId, result.cleared);
+
+    res.json(result);
   })
 );
 

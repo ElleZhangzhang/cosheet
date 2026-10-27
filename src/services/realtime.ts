@@ -7,6 +7,8 @@ import type {
   RealtimeCellUpdate,
   RealtimeCursor,
   RealtimeUser,
+  RealtimeVersionCreated,
+  RealtimeCellEditsCleared,
 } from "@/types/realtime";
 
 interface RealtimeHandlers {
@@ -15,6 +17,8 @@ interface RealtimeHandlers {
   onPresence?: (users: RealtimeUser[]) => void;
   onCursor?: (cursor: RealtimeCursor) => void;
   onCursorClear?: (user: RealtimeUser) => void;
+  onVersionCreated?: (event: RealtimeVersionCreated) => void;
+  onCellEditsCleared?: (event: RealtimeCellEditsCleared) => void;
   onCellUpdate?: (update: RealtimeCellUpdate) => void;
   onError?: (message: string) => void;
   onClose?: (code: number, reason: string) => void;
@@ -165,6 +169,54 @@ function createRealtimeClient(
         const user = parseUser(parsed.user);
         if (user) {
           handlers.onCursorClear?.(user);
+        }
+        return;
+      }
+      case "version:created": {
+        const version = parsed.version;
+        const file = parsed.file;
+
+        if (
+          typeof parsed.sourceVersionId !== "string" ||
+          !isRecord(version) ||
+          !isRecord(file) ||
+          typeof version.id !== "string" ||
+          typeof version.versionNumber !== "number" ||
+          typeof version.baseVersionId !== "string" ||
+          typeof version.rowCount !== "number" ||
+          typeof version.chunkCount !== "number" ||
+          typeof file.id !== "string" ||
+          typeof file.latestVersionNumber !== "number"
+        ) {
+          return;
+        }
+
+        handlers.onVersionCreated?.({
+          sourceVersionId: parsed.sourceVersionId,
+          version: {
+            id: version.id,
+            versionNumber: version.versionNumber,
+            baseVersionId: version.baseVersionId,
+            status: "ready",
+            rowCount: version.rowCount,
+            chunkCount: version.chunkCount,
+          },
+          file: {
+            id: file.id,
+            latestVersionNumber: file.latestVersionNumber,
+          },
+        });
+        return;
+      }
+      case "cells:cleared": {
+        if (
+          typeof parsed.versionId === "string" &&
+          typeof parsed.cleared === "number"
+        ) {
+          handlers.onCellEditsCleared?.({
+            versionId: parsed.versionId,
+            cleared: parsed.cleared,
+          });
         }
         return;
       }

@@ -8,10 +8,14 @@ import type {
   RealtimeCellUpdate,
   RealtimeCursor,
   RealtimeUser,
+  RealtimeVersionCreated,
+  RealtimeCellEditsCleared,
 } from "@/types/realtime";
 
 interface UseRealtimeOptions {
   onCellUpdate?: (update: RealtimeCellUpdate) => void;
+  onVersionCreated?: (event: RealtimeVersionCreated) => void;
+  onCellEditsCleared?: (event: RealtimeCellEditsCleared) => void;
 }
 
 function useRealtime(
@@ -112,6 +116,20 @@ function useRealtime(
         }
 
         cursors.delete(user.userId);
+      },
+      onVersionCreated: (event) => {
+        if (currentGeneration !== generation) {
+          return;
+        }
+
+        options.onVersionCreated?.(event);
+      },
+      onCellEditsCleared: (event) => {
+        if (currentGeneration !== generation) {
+          return;
+        }
+
+        options.onCellEditsCleared?.(event);
       },
       onCellUpdate: (update) => {
         if (currentGeneration !== generation) {

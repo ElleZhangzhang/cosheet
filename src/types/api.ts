@@ -223,6 +223,27 @@ interface VersionCell {
 interface UpdateVersionCellResponse {
   cell: VersionCell;
 }
+
+// 保留版本响应类型
+interface RetainVersionResponse {
+  version: {
+    id: string;
+    versionNumber: number;
+    baseVersionId: string;
+    status: "ready";
+    rowCount: number;
+    chunkCount: number;
+  };
+  file: {
+    id: string;
+    latestVersionNumber: number;
+  };
+}
+
+interface ClearVersionEditsResponse {
+  versionId: string;
+  cleared: number;
+}
 //#endregion
 
 //#region chunk
@@ -299,6 +320,8 @@ export type {
   VersionRowsResponse,
   VersionCell,
   UpdateVersionCellResponse,
+  RetainVersionResponse,
+  ClearVersionEditsResponse,
   UploadChunkResponse,
   UploadedChunkInfo,
   VersionChunksResponse,

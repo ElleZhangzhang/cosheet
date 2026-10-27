@@ -42,6 +42,8 @@ const emit = defineEmits<{
     payload: { rowIndex: number; columnKey: string | null }
   ): void;
   (e: "cursor-clear"): void;
+  (e: "cell-saved", versionId: string): void;
+  (e: "busy-change", busy: boolean): void;
 }>();
 
 const { total, loading, error, loadRange, getRow, refresh, applyCellUpdate } =
@@ -78,6 +80,16 @@ const editingCell = ref<EditingCell | null>(null);
 const editValue = ref("");
 const saving = ref(false);
 const saveError = ref("");
+
+const editingBusy = computed(
+  () => Boolean(editingCell.value) || saving.value
+);
+
+watch(
+  editingBusy,
+  (busy) => emit("busy-change", busy),
+  { immediate: true }
+);
 
 const displayTotal = computed(() => total.value ?? props.rowCount);
 
@@ -325,6 +337,7 @@ async function commitEdit(item: VisibleRow): Promise<void> {
 
     // 更新前端内存并delete-indexedDB-versionId
     applyCellUpdate(data.cell);
+    emit("cell-saved", props.versionId);
   } catch (err) {
     saveError.value = err instanceof Error ? err.message : "保存单元格失败";
   } finally {

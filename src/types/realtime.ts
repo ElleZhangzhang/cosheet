@@ -75,6 +75,36 @@ interface ServerCursorClearMessage {
   user: RealtimeUser;
 }
 
+interface RealtimeVersionCreated {
+  sourceVersionId: string;
+  version: {
+    id: string;
+    versionNumber: number;
+    baseVersionId: string;
+    status: "ready";
+    rowCount: number;
+    chunkCount: number;
+  };
+  file: {
+    id: string;
+    latestVersionNumber: number;
+  };
+}
+
+interface ServerVersionCreatedMessage extends RealtimeVersionCreated {
+  type: "version:created";
+}
+
+interface RealtimeCellEditsCleared {
+  versionId: string;
+  cleared: number;
+}
+
+interface ServerCellEditsClearedMessage
+  extends RealtimeCellEditsCleared {
+  type: "cells:cleared";
+}
+
 interface ServerCellUpdateMessage {
   type: "cell:update";
   versionId: string;
@@ -92,6 +122,8 @@ type ServerMessage =
   | ServerPresenceMessage
   | ServerCursorMessage
   | ServerCursorClearMessage
+  | ServerVersionCreatedMessage
+  | ServerCellEditsClearedMessage
   | ServerCellUpdateMessage
   | ServerErrorMessage;
 
@@ -100,6 +132,8 @@ export type {
   RealtimeCell,
   RealtimeCellUpdate,
   RealtimeCursor,
+  RealtimeVersionCreated,
+  RealtimeCellEditsCleared,
   ClientMessage,
   ClientJoinMessage,
   ClientLeaveMessage,
@@ -110,6 +144,8 @@ export type {
   ServerPresenceMessage,
   ServerCursorMessage,
   ServerCursorClearMessage,
+  ServerVersionCreatedMessage,
+  ServerCellEditsClearedMessage,
   ServerCellUpdateMessage,
   ServerErrorMessage,
 };

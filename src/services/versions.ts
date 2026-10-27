@@ -7,6 +7,8 @@ import type {
   VersionRowsQuery,
   VersionRowsResponse,
   UpdateVersionCellResponse,
+  RetainVersionResponse,
+  ClearVersionEditsResponse,
 } from "@/types/api";
 
 function uploadChunk(
@@ -95,6 +97,29 @@ function updateVersionCell(
   );
 }
 
+function retainVersion(
+  versionId: string
+): Promise<RetainVersionResponse> {
+  return request<RetainVersionResponse>(
+    `/versions/${versionId}/retain`,
+    {
+      // KNOW 所以POST的body不是必要传的内容
+      method: "POST",
+    }
+  );
+}
+
+function clearVersionEdits(
+  versionId: string
+): Promise<ClearVersionEditsResponse> {
+  return request<ClearVersionEditsResponse>(
+    `/versions/${versionId}/cells`,
+    {
+      method: "DELETE",
+    }
+  );
+}
+
 export {
   uploadChunk,
   completeVersion,
@@ -102,4 +127,6 @@ export {
   getVersionChunks,
   getVersionRows,
   updateVersionCell,
+  retainVersion,
+  clearVersionEdits,
 };

@@ -1,7 +1,7 @@
 // 说明：单元格编辑覆盖层。基础chunk rows保持只读，编辑写入cell_edits。
 
 import { randomUUID } from "node:crypto";
-import type { RowDataPacket } from "mysql2";
+import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import { pool } from "../db/pool";
 import { HttpError } from "../utils/httpError";
 import type { FileColumnInput } from "../utils/validate";
@@ -49,6 +49,11 @@ export interface CellEdit {
 }
 
 export type CellEditsMap = Map<number, Record<string, unknown>>;
+
+export interface DiscardCellEditsResult {
+  versionId: string;
+  cleared: number;
+}
 
 function parseColumns(value: unknown): FileColumnInput[] {
   const parsed = typeof value === "string" ? JSON.parse(value) : value;
@@ -151,6 +156,85 @@ function normalizeCellValue(
   }
 
   return String(value);
+}
+
+// 清除某个版本的全部草稿，回退到基础数据
+export async function discardCellEdits(
+  userId: string,
+  versionId: string
+): Promise<DiscardCellEditsResult> {
+  const [versions] = await pool.execute<VersionEditContextRow[]>(
+    `SELECT v.id, v.file_id, v.status, v.row_count, v.columns_json,
+            f.workspace_id
+     FROM file_versions v
+     JOIN files f ON f.id = v.file_id
+     WHERE v.id = ? AND f.deleted_at IS NULL
+     LIMIT 1`,
+    [versionId]
+  );
+  const version = versions[0];
+
+  if (!version) {
+    throw new HttpError(404, "版本不存在");
+  }
+
+  await assertWorkspaceAccess(userId, version.workspace_id, ["owner"]);
+
+  if (version.status !== "ready") {
+    throw new HttpError(409, "只能清除 ready 版本的修改");
+  }
+
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    const [fileRows] = await connection.execute<FileLockRow[]>(
+      "SELECT id FROM files WHERE id = ? AND deleted_at IS NULL FOR UPDATE",
+      [version.file_id]
+    );
+    if (!fileRows[0]) {
+      throw new HttpError(404, "文件不存在");
+    }
+
+    const [versionRows] = await connection.execute<LockedVersionRow[]>(
+      `SELECT status, row_count
+       FROM file_versions
+       WHERE id = ?
+       FOR UPDATE`,
+      [versionId]
+    );
+    const lockedVersion = versionRows[0];
+
+    if (!lockedVersion) {
+      throw new HttpError(404, "版本不存在");
+    }
+    if (lockedVersion.status !== "ready") {
+      throw new HttpError(409, "只能清除 ready 版本的修改");
+    }
+
+    const [result] = await connection.execute<ResultSetHeader>(
+      "DELETE FROM cell_edits WHERE version_id = ?",
+      [versionId]
+    );
+
+    await connection.commit();
+
+    return {
+      versionId,
+      cleared: result.affectedRows,
+    };
+  } catch (error) {
+    try {
+      await connection.rollback();
+    } catch {
+      // 忽略回滚失败
+    }
+
+    throw error;
+  } finally {
+    connection.release();
+  }
 }
 
 // 编辑任意ready版本的单个单元格

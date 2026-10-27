@@ -454,7 +454,12 @@ POST /api/files/:fileId/shares { role: "viewer", expiresInDays: 7 }
 - 版本历史允许分叉：
   - 例如已有 v1、v2，修改 v1 并保留，会生成基于 v1 的 v3；v2 保留。
   - 之后修改 v2 并保留，会生成基于 v2 的新版本。
-- owner 不点保留时，修改继续作为草稿，不产生新版本；v1 不提供“放弃更改”。
+- owner 不点保留时，修改继续作为草稿，不产生新版本。
+- owner 可以点击“清除改动”：
+  1. 文件加锁，删除该版本全部 `cell_edits`。
+  2. 版本恢复为基础数据，但仍是 ready、仍可编辑。
+  3. 广播 `cells:cleared`，所有查看该版本的客户端清空行缓存并重新加载。
+  4. 清除只影响当前版本，不影响其他版本和已保留的新版本。
 - 评论按版本隔离，新版本不继承旧版本评论。
 - 只有 owner 能保留版本；editor 只能编辑草稿。
 - 文件详情/版本列表返回每个版本的 `pendingEditCount`。
@@ -1271,10 +1276,11 @@ mysql -u root -p < server/sql/schema.sql
 2. 所有 ready 版本都可编辑；修改写入该版本的 `cell_edits` 草稿。
 3. owner 从任意版本点击“保留版本”：文件加锁，读取该版本 chunks + 它的 `cell_edits`，物化写入新版本 chunk 文件，创建 vN+1（ready），记录 `base_version_id`，更新 `latest_version_number`。
 4. 新版本基础数据包含该版本的草稿值；提交成功后清空源版本草稿，源版本恢复为基础数据但仍可编辑；其他版本不受影响。
-5. 未保留的修改继续作为草稿，不提供“放弃更改”。
+5. 未保留的修改继续作为草稿；owner 也可点击“清除改动”回退到基础数据。
 6. 提交期间拒绝任何版本的新编辑和再次保留；成功后向源版本房间广播 `version:created`，源版本房间的在线成员自动切到新版本。
+7. 清除改动时删除当前版本草稿，广播 `cells:cleared`，客户端清缓存并重新加载。
 
-**验收**：第一版只能上传；所有版本可编辑；owner 可从任意版本保留草稿生成新版本；editor 只能编辑不能保留；保留成功后源版本草稿清空但可继续编辑；版本历史允许分叉；评论仍按版本隔离。
+**验收**：第一版只能上传；所有版本可编辑；owner 可从任意版本保留草稿生成新版本；owner 可清除当前版本草稿；editor 只能编辑不能保留或清除；保留成功后源版本草稿清空但可继续编辑；版本历史允许分叉；评论仍按版本隔离。
 
 ### Phase 2.7：分享链接（只读 + 外链编辑，暂缓 / Backlog）
 
@@ -1328,6 +1334,8 @@ mysql -u root -p < server/sql/schema.sql
 - [ ] 刷新页面后表格数据来自服务端
 - [ ] 第一版通过 Excel 上传；首版 ready 后不能手动上传新版本
 - [ ] owner 点击“保留版本”生成新版本；editor 不能保留
+- [ ] owner 点击“清除改动”回退到基础数据；editor 不能清除
+- [ ] 清除后当前版本行缓存失效并重新加载
 - [ ] 任意 ready 版本都可编辑，包括旧版本
 - [ ] 保留成功后源版本草稿清空、恢复为基础数据，但仍可继续编辑
 - [ ] 新版本基础数据包含源版本 + 源版本草稿；版本历史允许分叉并记录 baseVersionId
@@ -1599,6 +1607,7 @@ Body：
 - 事件：
   - `cell:update`：广播单元格新值、revision、编辑者。
   - `version:created`：owner 保留版本后，通知源版本房间成员切换到新版本；其他版本房间不受影响。
+  - `cells:cleared`：owner 清除草稿后，通知版本房间成员回退并重新加载。
   - `presence:join` / `presence:leave`
   - `presence:cursor`：在线用户当前行/列。
   - `cursor:clear`：用户结束编辑后，其他人移除该用户光标。
@@ -1671,11 +1680,14 @@ POST /api/shares/:token/join   （需要登录）
   6. 向源版本房间广播 `version:created`；源版本房间的在线成员自动切到新版本。
 - 新版本基础数据包含草稿值，新版本自身没有 `cell_edits`。
 - 版本历史允许分叉：v1、v2 后修改 v1 并保留，生成基于 v1 的 v3；v2 保留。
-- 未保留的修改继续作为草稿；v1 不提供“放弃更改”。
+- 未保留的修改继续作为草稿。
+- owner 可以点击“清除改动”：删除当前版本草稿，广播 `cells:cleared`，客户端清空行缓存并重新加载；editor 不能清除。
 - 评论按版本隔离，新版本不继承旧评论。
 - 只有 owner 可以保留版本；editor 只能编辑草稿。
 - 版本列表返回每个版本的 `baseVersionId` 和 `pendingEditCount`。
-- 接口：`POST /api/versions/:versionId/retain`。
+- 接口：
+  - `POST /api/versions/:versionId/retain`
+  - `DELETE /api/versions/:versionId/cells`
 
 ### 29.3 验收
 

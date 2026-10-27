@@ -4,7 +4,6 @@ import { useRoute, useRouter } from "vue-router";
 import AppSidebar from "@/components/AppSidebar.vue";
 import CommentsPanel from "@/components/CommentsPanel.vue";
 import RemoteVirtualTable from "@/components/DataTable/RemoteVirtualTable.vue";
-import FileUploadDialog from "@/components/FileUploadDialog.vue";
 import VersionSelector from "@/components/VersionSelector.vue";
 import { useRealtime } from "@/composables/useRealtime";
 import {
@@ -14,10 +13,16 @@ import {
   updateComment as updateCommentRequest,
 } from "@/services/comments";
 import { getFileDetail } from "@/services/files";
+import { clearVersionEdits, retainVersion } from "@/services/versions";
 import { useAuthStore } from "@/stores/auth";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { clearVersionRowCache } from "@/utils/rowCache";
 import { getUserColor, getUserInitial } from "@/utils/userColor";
 import type { FileDetailResponse, RowComment } from "@/types/api";
+import type {
+  RealtimeCellEditsCleared,
+  RealtimeVersionCreated,
+} from "@/types/realtime";
 
 const route = useRoute();
 const router = useRouter();
@@ -33,8 +38,13 @@ const appliedQuery = ref("");
 const sortBy = ref<string | null>(null);
 const sortDir = ref<"asc" | "desc">("asc");
 const selectedVersionId = ref("");
-const uploadOpen = ref(false);
 const tableRef = ref<InstanceType<typeof RemoteVirtualTable> | null>(null);
+const tableBusy = ref(false);
+const hasPendingEdits = ref(false);
+const retaining = ref(false);
+const clearing = ref(false);
+const versionActionError = ref("");
+const tableResetKey = ref(0);
 
 const comments = ref<RowComment[]>([]);
 const commentsLoading = ref(false);
@@ -68,24 +78,48 @@ const isHistorical = computed(() =>
 
 const columns = computed(() => selectedVersion.value?.columns ?? []);
 
-const currentRole = computed(
-  () => workspaceStore.currentWorkspace?.role
-);
+const currentRole = computed(() => workspaceStore.currentWorkspace?.role);
 
-const canUpload = computed(() => {
+const isOwner = computed(() => currentRole.value === "owner");
+
+const canEdit = computed(() => {
   const role = currentRole.value;
   return role === "owner" || role === "editor";
 });
 
-const canEdit = computed(
-  () => canUpload.value && !isHistorical.value
+const canRetain = computed(
+  () =>
+    isOwner.value &&
+    Boolean(selectedVersion.value) &&
+    selectedVersion.value?.status === "ready" &&
+    hasPendingEdits.value &&
+    !tableBusy.value &&
+    !retaining.value &&
+    !clearing.value
+);
+
+const canClear = computed(
+  () =>
+    isOwner.value &&
+    Boolean(selectedVersion.value) &&
+    selectedVersion.value?.status === "ready" &&
+    hasPendingEdits.value &&
+    !tableBusy.value &&
+    !retaining.value &&
+    !clearing.value
+);
+
+watch(
+  selectedVersion,
+  (version) => {
+    hasPendingEdits.value = (version?.pendingEditCount ?? 0) > 0;
+  },
+  { immediate: true }
 );
 
 const canComment = computed(() => {
   const role = currentRole.value;
-  return (
-    role === "owner" || role === "editor" || role === "commenter"
-  );
+  return role === "owner" || role === "editor" || role === "commenter";
 });
 
 const canResolveAny = computed(
@@ -100,10 +134,7 @@ const commentCounts = computed(() => {
   const counts = new Map<number, number>();
 
   for (const comment of comments.value) {
-    counts.set(
-      comment.rowIndex,
-      (counts.get(comment.rowIndex) ?? 0) + 1
-    );
+    counts.set(comment.rowIndex, (counts.get(comment.rowIndex) ?? 0) + 1);
   }
 
   return counts;
@@ -146,20 +177,18 @@ const {
   error: realtimeError,
   sendCursor,
   clearCursor,
-} = useRealtime(
-  () => selectedVersion.value?.id ?? null,
-  {
-    onCellUpdate: (update) => {
-      tableRef.value?.applyCellUpdate(update.cell);
-    },
-  }
-);
+} = useRealtime(() => selectedVersion.value?.id ?? null, {
+  onCellUpdate: (update) => {
+    tableRef.value?.applyCellUpdate(update.cell);
+    hasPendingEdits.value = true;
+  },
+  onVersionCreated: handleVersionCreated,
+  onCellEditsCleared: handleCellEditsCleared,
+});
 
 const visiblePresence = computed(() => presence.value.slice(0, 5));
 
-const extraOnlineCount = computed(() =>
-  Math.max(0, presence.value.length - 5)
-);
+const extraOnlineCount = computed(() => Math.max(0, presence.value.length - 5));
 
 const realtimeStatus = computed(() => {
   if (realtimeError.value) {
@@ -203,7 +232,9 @@ async function loadFile(): Promise<void> {
 
   detailLoading.value = true;
   detailError.value = "";
+  versionActionError.value = "";
   detail.value = null;
+  tableBusy.value = false;
   resetQuery();
 
   try {
@@ -247,17 +278,163 @@ function handleVersionChange(versionId: string): void {
   }
 
   selectedVersionId.value = version.id;
+  versionActionError.value = "";
+  tableBusy.value = false;
   resetQuery();
 }
 
-async function handleVersionUploaded(): Promise<void> {
-  uploadOpen.value = false;
-  await loadFile();
+function handleTableCellSaved(versionId: string): void {
+  if (selectedVersion.value?.id === versionId) {
+    hasPendingEdits.value = true;
+  }
 }
 
-async function handleVersionUploadCancelled(): Promise<void> {
-  uploadOpen.value = false;
-  await loadFile();
+function handleTableBusy(busy: boolean): void {
+  tableBusy.value = busy;
+}
+
+async function switchToVersion(
+  versionId: string,
+  sourceVersionId: string
+): Promise<void> {
+  if (!fileId.value || selectedVersionId.value === versionId) {
+    return;
+  }
+  if (selectedVersionId.value !== sourceVersionId) {
+    return;
+  }
+
+  try {
+    const data = await getFileDetail(fileId.value);
+    detail.value = data;
+
+    if (
+      selectedVersionId.value !== sourceVersionId ||
+      !data.versions.some(
+        (version) => version.id === versionId && version.status === "ready"
+      )
+    ) {
+      return;
+    }
+
+    selectedVersionId.value = versionId;
+    hasPendingEdits.value = false;
+    versionActionError.value = "";
+    resetQuery();
+  } catch {
+    versionActionError.value = "版本已更新，但刷新文件失败，请刷新页面";
+  }
+}
+
+function handleVersionCreated(event: RealtimeVersionCreated): void {
+  if (event.file.id !== fileId.value) {
+    return;
+  }
+
+  if (selectedVersion.value?.id !== event.sourceVersionId) {
+    return;
+  }
+
+  void switchToVersion(event.version.id, event.sourceVersionId);
+}
+
+async function handleRetainVersion(): Promise<void> {
+  const version = selectedVersion.value;
+  if (!version || !canRetain.value) {
+    return;
+  }
+
+  retaining.value = true;
+  versionActionError.value = "";
+
+  try {
+    const result = await retainVersion(version.id);
+    await switchToVersion(result.version.id, version.id);
+  } catch (err) {
+    versionActionError.value =
+      err instanceof Error ? err.message : "保留版本失败";
+  } finally {
+    retaining.value = false;
+  }
+}
+
+const clearingVersions = new Set<string>();
+
+// 用户点击“清除改动” → 后端删除cell_edits相关内容 → 前端删除cache相关内容 + 重新getFileDetail获取数据
+async function applyCellEditsCleared(
+  event: RealtimeCellEditsCleared
+): Promise<void> {
+  const versionId = event.versionId;
+  const version = selectedVersion.value;
+
+  if (!version || version.id !== versionId) {
+    return;
+  }
+  if (!hasPendingEdits.value && version.pendingEditCount === 0) {
+    return;
+  }
+  if (clearingVersions.has(versionId)) {
+    return;
+  }
+
+  clearingVersions.add(versionId);
+  let refreshError = "";
+
+  try {
+    await clearVersionRowCache(versionId);
+
+    try {
+      const data = await getFileDetail(fileId.value);
+      detail.value = data;
+    } catch {
+      refreshError = "改动已清除，但刷新文件失败，请刷新页面";
+    }
+
+    if (selectedVersion.value?.id !== versionId) {
+      return;
+    }
+
+    hasPendingEdits.value = false;
+    tableResetKey.value += 1;
+    versionActionError.value = refreshError;
+  } finally {
+    clearingVersions.delete(versionId);
+  }
+}
+
+function handleCellEditsCleared(event: RealtimeCellEditsCleared): void {
+  if (event.versionId !== selectedVersion.value?.id) {
+    return;
+  }
+
+  void applyCellEditsCleared(event);
+}
+
+async function handleClearChanges(): Promise<void> {
+  const version = selectedVersion.value;
+  if (!version || !canClear.value) {
+    return;
+  }
+
+  if (!window.confirm("确定清除当前版本的所有未保留修改吗？")) {
+    return;
+  }
+
+  clearing.value = true;
+  versionActionError.value = "";
+
+  try {
+    const result = await clearVersionEdits(version.id);
+    await applyCellEditsCleared({
+      versionId: result.versionId,
+      cleared: result.cleared,
+    });
+  } catch (err) {
+    versionActionError.value =
+      err instanceof Error ? err.message : "清除改动失败";
+  } finally {
+    clearing.value = false;
+  }
 }
 
 async function loadComments(versionId: string): Promise<void> {
@@ -283,8 +460,7 @@ async function loadComments(versionId: string): Promise<void> {
       return;
     }
 
-    commentsError.value =
-      err instanceof Error ? err.message : "加载评论失败";
+    commentsError.value = err instanceof Error ? err.message : "加载评论失败";
   } finally {
     if (requestId === commentsRequestId) {
       commentsLoading.value = false;
@@ -354,9 +530,7 @@ async function handleToggleCommentResolved(
   }
 }
 
-async function handleDeleteComment(
-  comment: RowComment
-): Promise<void> {
+async function handleDeleteComment(comment: RowComment): Promise<void> {
   if (commentSubmitting.value) {
     return;
   }
@@ -486,10 +660,7 @@ watch(
               class="realtime-status"
               :title="realtimeError || undefined"
             >
-              <span
-                class="realtime-dot"
-                :class="realtimeStatus"
-              ></span>
+              <span class="realtime-dot" :class="realtimeStatus"></span>
               <span class="realtime-label">{{ realtimeLabel }}</span>
               <div v-if="presence.length > 0" class="online-avatars">
                 <span
@@ -517,22 +688,60 @@ watch(
               @change="handleVersionChange"
             />
             <button
-              v-if="canUpload"
+              v-if="isOwner && selectedVersion"
               type="button"
-              class="upload-version-btn"
-              @click="uploadOpen = true"
+              class="clear-edits-btn"
+              :disabled="!canClear"
+              :title="
+                !hasPendingEdits
+                  ? '没有可清除的修改'
+                  : tableBusy
+                  ? '请先结束当前编辑'
+                  : clearing
+                  ? '正在清除改动'
+                  : retaining
+                  ? '正在保留版本'
+                  : '清除当前版本的所有未保留修改'
+              "
+              @click="handleClearChanges"
             >
-              上传新版本
+              {{ clearing ? "清除中..." : "清除改动" }}
+            </button>
+            <button
+              v-if="isOwner && selectedVersion"
+              type="button"
+              class="retain-version-btn"
+              :class="{ pending: hasPendingEdits }"
+              :disabled="!canRetain"
+              :title="
+                !hasPendingEdits
+                  ? '没有未保留的修改'
+                  : tableBusy
+                  ? '请先结束当前编辑'
+                  : retaining
+                  ? '正在保留版本'
+                  : clearing
+                  ? '正在清除改动'
+                  : '把当前版本的草稿保存为新版本'
+              "
+              @click="handleRetainVersion"
+            >
+              {{ retaining ? "保留中..." : "保留版本" }}
             </button>
             <span
               v-if="selectedVersion"
               class="status-badge"
               :class="isHistorical ? 'historical' : 'ready'"
             >
-              {{ isHistorical ? "历史版本 · 只读" : "就绪" }}
+              {{ isHistorical ? "历史版本" : "就绪" }}
             </span>
           </div>
         </header>
+
+        <div v-if="versionActionError" class="retain-error">
+          <span>{{ versionActionError }}</span>
+          <button type="button" @click="versionActionError = ''">关闭</button>
+        </div>
 
         <section v-if="!selectedVersion" class="status-card">
           文件还没有完成上传，暂时不能查看表格。
@@ -555,7 +764,7 @@ watch(
           <!-- LIGHT 虚拟滚动 -->
           <RemoteVirtualTable
             ref="tableRef"
-            :key="selectedVersion.id"
+            :key="`${selectedVersion.id}:${tableResetKey}`"
             :version-id="selectedVersion.id"
             :columns="columns"
             :row-count="selectedVersion.rowCount"
@@ -569,19 +778,12 @@ watch(
             @row-comment="handleRowComment"
             @cursor-change="handleCursorChange"
             @cursor-clear="handleCursorClear"
+            @cell-saved="handleTableCellSaved"
+            @busy-change="handleTableBusy"
           />
         </template>
       </template>
     </main>
-
-    <FileUploadDialog
-      v-if="detail"
-      v-model:open="uploadOpen"
-      :workspace-id="detail.file.workspaceId"
-      :target-file-id="detail.file.id"
-      @created="handleVersionUploaded"
-      @cancelled="handleVersionUploadCancelled"
-    />
 
     <CommentsPanel
       v-if="detail"
@@ -600,14 +802,6 @@ watch(
       @toggle-resolve="handleToggleCommentResolved"
       @delete="handleDeleteComment"
     />
-
-    <!-- KNOW -->
-    <!--
-    v-model:open="uploadOpen"
-    =
-    v-on:open="uploadOpen" 父将open传给子组件
-    @update:open="uploadOpen=$event" 子通过emit触发update:open改变open的值
-    -->
   </div>
 </template>
 
@@ -803,7 +997,28 @@ watch(
   font-weight: 700;
 }
 
-.upload-version-btn {
+.clear-edits-btn {
+  padding: 7px 12px;
+  border: 1px solid rgba(245, 108, 108, 0.3);
+  border-radius: 7px;
+  background: transparent;
+  color: #d05c5c;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.clear-edits-btn:hover:not(:disabled) {
+  background: #fef0f0;
+}
+
+.clear-edits-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.retain-version-btn {
   padding: 7px 12px;
   border: 1px solid rgba(191, 161, 117, 0.35);
   border-radius: 7px;
@@ -815,8 +1030,45 @@ watch(
   flex-shrink: 0;
 }
 
-.upload-version-btn:hover {
-  background: rgba(191, 161, 117, 0.15);
+.retain-version-btn.pending {
+  border-color: #bfa175;
+  background: #bfa175;
+  color: #fff;
+}
+
+.retain-version-btn:hover:not(:disabled) {
+  background: rgba(191, 161, 117, 0.2);
+}
+
+.retain-version-btn.pending:hover:not(:disabled) {
+  background: #b18f5f;
+}
+
+.retain-version-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.retain-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 10px 14px;
+  border: 1px solid rgba(245, 108, 108, 0.2);
+  border-radius: 8px;
+  background: #fef0f0;
+  color: #f56c6c;
+  font-size: 12px;
+}
+
+.retain-error button {
+  border: none;
+  background: transparent;
+  color: #f56c6c;
+  font-size: 12px;
+  cursor: pointer;
 }
 
 .table-controls {
