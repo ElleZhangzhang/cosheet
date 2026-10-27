@@ -4,6 +4,8 @@ import { useRoute, useRouter } from "vue-router";
 import AppSidebar from "@/components/AppSidebar.vue";
 import CommentsPanel from "@/components/CommentsPanel.vue";
 import RemoteVirtualTable from "@/components/DataTable/RemoteVirtualTable.vue";
+import ExportDialog from "@/components/ExportDialog.vue";
+import PendingVersionDialog from "@/components/PendingVersionDialog.vue";
 import VersionSelector from "@/components/VersionSelector.vue";
 import { useRealtime } from "@/composables/useRealtime";
 import {
@@ -45,6 +47,8 @@ const retaining = ref(false);
 const clearing = ref(false);
 const versionActionError = ref("");
 const tableResetKey = ref(0);
+const exportOpen = ref(false);
+const pendingVersionDialogOpen = ref(false);
 
 const comments = ref<RowComment[]>([]);
 const commentsLoading = ref(false);
@@ -338,10 +342,16 @@ function handleVersionCreated(event: RealtimeVersionCreated): void {
   void switchToVersion(event.version.id, event.sourceVersionId);
 }
 
-async function handleRetainVersion(): Promise<void> {
+async function retainCurrentVersion(): Promise<string | null> {
   const version = selectedVersion.value;
-  if (!version || !canRetain.value) {
-    return;
+
+  if (
+    !version ||
+    !isOwner.value ||
+    retaining.value ||
+    clearing.value
+  ) {
+    return null;
   }
 
   retaining.value = true;
@@ -350,12 +360,67 @@ async function handleRetainVersion(): Promise<void> {
   try {
     const result = await retainVersion(version.id);
     await switchToVersion(result.version.id, version.id);
+
+    if (selectedVersionId.value !== result.version.id) {
+      versionActionError.value =
+        "保留成功，但版本切换失败，请刷新页面";
+      return null;
+    }
+
+    return result.version.id;
   } catch (err) {
     versionActionError.value =
       err instanceof Error ? err.message : "保留版本失败";
+    return null;
   } finally {
     retaining.value = false;
   }
+}
+
+async function handleRetainVersion(): Promise<void> {
+  if (!canRetain.value) {
+    return;
+  }
+
+  await retainCurrentVersion();
+}
+
+function handleExportClick(): void {
+  if (
+    !selectedVersion.value ||
+    tableBusy.value ||
+    retaining.value ||
+    clearing.value
+  ) {
+    return;
+  }
+
+  if (!hasPendingEdits.value) {
+    exportOpen.value = true;
+    return;
+  }
+
+  if (!isOwner.value) {
+    versionActionError.value =
+      "当前版本有未保留修改，请等待 owner 保留或清除后再导出";
+    return;
+  }
+
+  pendingVersionDialogOpen.value = true;
+}
+
+async function handlePendingRetain(): Promise<void> {
+  pendingVersionDialogOpen.value = false;
+  const newVersionId = await retainCurrentVersion();
+
+  if (newVersionId) {
+    exportOpen.value = true;
+  }
+}
+
+async function handlePendingClear(): Promise<void> {
+  pendingVersionDialogOpen.value = false;
+  await clearCurrentVersionEdits();
 }
 
 const clearingVersions = new Set<string>();
@@ -410,14 +475,16 @@ function handleCellEditsCleared(event: RealtimeCellEditsCleared): void {
   void applyCellEditsCleared(event);
 }
 
-async function handleClearChanges(): Promise<void> {
+async function clearCurrentVersionEdits(): Promise<boolean> {
   const version = selectedVersion.value;
-  if (!version || !canClear.value) {
-    return;
-  }
 
-  if (!window.confirm("确定清除当前版本的所有未保留修改吗？")) {
-    return;
+  if (
+    !version ||
+    !isOwner.value ||
+    clearing.value ||
+    retaining.value
+  ) {
+    return false;
   }
 
   clearing.value = true;
@@ -429,12 +496,26 @@ async function handleClearChanges(): Promise<void> {
       versionId: result.versionId,
       cleared: result.cleared,
     });
+    return true;
   } catch (err) {
     versionActionError.value =
       err instanceof Error ? err.message : "清除改动失败";
+    return false;
   } finally {
     clearing.value = false;
   }
+}
+
+async function handleClearChanges(): Promise<void> {
+  if (!canClear.value) {
+    return;
+  }
+
+  if (!window.confirm("确定清除当前版本的所有未保留修改吗？")) {
+    return;
+  }
+
+  await clearCurrentVersionEdits();
 }
 
 async function loadComments(versionId: string): Promise<void> {
@@ -688,6 +769,16 @@ watch(
               @change="handleVersionChange"
             />
             <button
+              v-if="selectedVersion"
+              type="button"
+              class="export-version-btn"
+              :disabled="tableBusy || retaining || clearing"
+              title="导出当前版本"
+              @click="handleExportClick"
+            >
+              导出
+            </button>
+            <button
               v-if="isOwner && selectedVersion"
               type="button"
               class="clear-edits-btn"
@@ -784,6 +875,23 @@ watch(
         </template>
       </template>
     </main>
+
+    <PendingVersionDialog
+      :open="pendingVersionDialogOpen"
+      @retain="handlePendingRetain"
+      @clear="handlePendingClear"
+      @close="pendingVersionDialogOpen = false"
+    />
+
+    <ExportDialog
+      v-if="detail && selectedVersion"
+      v-model:open="exportOpen"
+      :version-id="selectedVersion.id"
+      :version-number="selectedVersion.versionNumber"
+      :file-name="detail.file.name"
+      :columns="columns"
+      :row-count="selectedVersion.rowCount"
+    />
 
     <CommentsPanel
       v-if="detail"
@@ -995,6 +1103,27 @@ watch(
   color: #8a7355;
   font-size: 10px;
   font-weight: 700;
+}
+
+.export-version-btn {
+  padding: 7px 12px;
+  border: 1px solid rgba(191, 161, 117, 0.35);
+  border-radius: 7px;
+  background: #fffdf9;
+  color: #8a7355;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.export-version-btn:hover:not(:disabled) {
+  background: rgba(191, 161, 117, 0.1);
+}
+
+.export-version-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .clear-edits-btn {

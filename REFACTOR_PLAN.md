@@ -2,18 +2,18 @@
 
 > 目标读者：负责实施改造的 Claude。
 > 使用方式：先完整阅读本文，再通读现有代码，按第 9 节的阶段顺序实施。
-> 核心约束：**删除所有 AI 与图表功能；使用真实 Node 后端（不用 mock）；保留 Web Worker 文件解析、IndexedDB 分片/缓存、虚拟滚动。报告、表格快照、PDF 均不做。**
+> 核心约束：**删除所有 AI 与图表功能；使用真实 Node 后端（不用 mock）；保留 Web Worker 文件解析、IndexedDB 分片/缓存、虚拟滚动、版本导出 Excel/PDF。报告和表格快照不做。**
 
 ---
 
 ## 0. 一句话目标
 
-把现有「浏览器本地 Excel 数据分析工具」改造成一个 **可登录、可上传、可分享、可评论、可协同编辑的云端表格协作平台**：
+把现有「浏览器本地 Excel 数据分析工具」改造成一个 **可登录、可上传、可分享、可评论、可协同编辑、可导出版本 Excel/PDF 的云端表格协作平台**：
 
 - 前端：Vue 3 + Vite + TypeScript + Pinia + Element Plus
 - 后端：Node.js + Express + MySQL（真实后端），后续可平移到 Java / Spring Boot
 - 文件数据：前端 Worker 解析 Excel → 分片上传 → 服务端持久化 → 虚拟表格按需拉取 → IndexedDB 缓存
-- 协作：工作空间、成员角色、行级评论、真实分享链接、版本历史、单元格实时协同、owner 保留版本
+- 协作：工作空间、成员角色、行级评论、真实分享链接、版本历史、单元格实时协同、owner 保留版本、版本导出 Excel/PDF
 
 **最终形态**：类似「轻量版腾讯文档/飞书表格」的数据表格协作平台，而不是 AI 图表生成器。
 
@@ -162,7 +162,7 @@ Vite 当前把 `/api` 代理到 `https://dashscope.aliyuncs.com`，`.env` 中有
   6. `while (heightLeft > 0)` 逐页 `addPage` + `addImage`
   7. `pdf.save('..._分析报告.pdf')`
 
-**改造后**：报告、TipTap 报告内容和 PDF 导出全部删除；原 PDF 代码仅作历史参考，不保留。
+**改造后**：报告、TipTap 报告内容和旧报告 PDF 导出删除；版本导出 Excel/PDF 使用新实现，见第 30 节。
 
 ### 3.7 路由与类型
 
@@ -201,7 +201,7 @@ Vite 当前把 `/api` 代理到 `https://dashscope.aliyuncs.com`，`.env` 中有
 | `.history/` | 忽略，不要修改或提交 |
 | `.env` | 删除 `VITE_DEEPSEEK_KEY`；新增后端环境变量说明 |
 | `vite.config.ts` | **修改代理**：`/api` → `http://localhost:3000`，去掉 rewrite 和 dashscope |
-| `package.json` | 删除 `echarts`；删除不再使用的 TipTap/html2canvas/jsPDF；保留 xlsx/idb 等 |
+| `package.json` | 删除 `echarts` 和不再使用的 TipTap；保留 xlsx/idb/html2canvas/jsPDF 供版本导出 |
 | `CLAUDE.md` / `README.md` | **重写**为新架构说明 |
 
 ### 3.9 已知问题 / 技术债
@@ -266,7 +266,8 @@ Vite 当前把 `/api` 代理到 `https://dashscope.aliyuncs.com`，`.env` 中有
 6. **评论**：对某行创建评论、列表、标记解决；按版本隔离；侧边栏展示。
 7. **分享（暂缓）**：为文件创建只读分享链接（可设过期天数）；公开路由 `/s/:token` 跨设备可访问；服务端校验 token 和过期时间。和外链编辑一起做。
 8. **版本历史**：第一版通过 Excel 上传；所有 ready 版本可编辑；owner 可从任意版本点击“保留版本”把该版本的草稿提交为新版本；版本历史允许分叉并记录 `baseVersionId`；版本 diff 放 Phase 4。
-9. **基础运营**：种子账号、示例工作空间、错误提示、加载态。
+9. **版本导出**：把当前版本导出为 Excel（完整版本）或 PDF（竖向 A4、多页、全部行）；包含草稿值。
+10. **基础运营**：种子账号、示例工作空间、错误提示、加载态。
 
 ### 4.3 明确不做（v1 非目标）
 
@@ -279,7 +280,7 @@ Vite 当前把 `/api` 代理到 `https://dashscope.aliyuncs.com`，`.env` 中有
 - ❌ 完整回收站、标签、活动日志、通知（可后续）
 - ❌ 分享链接匿名评论（v1 只读）
 - ❌ 报告列表/报告 CRUD/TipTap 报告编辑器
-- ❌ 表格快照、PDF 导出
+- ❌ 表格快照预览、报告式 PDF
 - ❌ 后端解析 Excel（v1 保持前端 Worker 解析）
 
 ---
@@ -794,7 +795,7 @@ complete 时服务端校验：
 
 ## 9.6 Reports（已取消）
 
-> 2026-10-25 决定：不做报告，以下接口不实现；表格快照和 PDF 也取消。版本工作流见 6.4 和第 29 节。
+> 2026-10-25 决定：不做报告，以下接口不实现；表格快照取消。版本导出见第 30 节，版本工作流见 6.4 和第 29 节。
 
 ---
 
@@ -893,7 +894,7 @@ complete 时服务端校验：
 
 ### ReportEditorView（已取消）
 
-> 2026-10-25 决定：不做报告编辑器和 PDF。`src/views/ReportEditor.vue` 作为遗留文件待清理；版本工作流见 6.4 和第 29 节。
+> 2026-10-25 决定：不做报告编辑器。`src/views/ReportEditor.vue` 作为遗留文件待清理；版本导出见第 30 节，版本工作流见 6.4 和第 29 节。
 
 ## 13. 远程虚拟表格改造
 
@@ -966,7 +967,7 @@ complete 时服务端校验：
 
 ## 17. 报告快照节点（已取消）
 
-> **2026-10-25 决定：不做报告、快照和 PDF，也不实现 `tableSnapshot` 自定义节点。** 版本工作流见 6.4 和第 29 节。
+> **2026-10-25 决定：不做报告和快照，也不实现 `tableSnapshot` 自定义节点。** 直接版本导出见第 30 节，版本工作流见 6.4 和第 29 节。
 
 ## 18. 清理项与依赖
 
@@ -1301,13 +1302,14 @@ mysql -u root -p < server/sql/schema.sql
 
 **验收**：只读链接在无痕窗口可访问且过期失效；新账号通过编辑链接注册并加入工作空间后可编辑；已有成员角色不被链接修改；过期/撤销链接不能加入；加入后在线用户、光标、单元格更新正常。
 
-### Phase 3：清理与收尾
+### Phase 3：版本导出、清理与收尾
 
-1. 删除报告、TipTap、快照、PDF 相关遗留文件、路由、依赖。
-2. 文档、测试、边界处理。
-3. 真实数据量和权限回归验证。
+1. 版本导出 Excel/PDF；PDF 竖向 A4、多页、导出全部行。
+2. 删除报告、TipTap、快照相关遗留文件、路由、依赖；保留 xlsx/html2canvas/jsPDF 供版本导出。
+3. 文档、测试、边界处理。
+4. 真实数据量和权限回归验证。
 
-**验收**：无报告/快照/PDF 入口和依赖；现有上传、版本、评论、分享、实时协同、保留版本正常。
+**验收**：版本 Excel/PDF 可导出；无报告/快照入口和依赖；现有上传、版本、评论、实时协同、保留版本正常。
 
 ### Phase 4（可选）
 
@@ -1342,9 +1344,12 @@ mysql -u root -p < server/sql/schema.sql
 - [ ] 未保留的修改继续作为草稿
 - [ ] 保留期间新的编辑被拒绝；成功后在线成员切到新版本
 - [ ] 行评论创建/展示/解决；切换版本评论隔离
+- [ ] 版本可导出 Excel（完整版本）和 PDF（全部行、竖向 A4 多页）
+- [ ] 有草稿时导出先询问保留/清除；非 owner 不能继续
+- [ ] 导出包含草稿值、表头、中文、PDF 分页正常
 - [ ] （暂缓/Backlog）只读分享链接：跨设备/无痕可访问；过期失效；只读
 - [ ] （暂缓/Backlog）编辑分享链接：登录/注册后加入工作空间并可实时编辑
-- [ ] 无报告、快照、PDF 入口、API 和持久化
+- [ ] 无报告、快照入口、API 和持久化
 - [ ] 无 AI、无图表、无 ECharts 依赖与入口
 
 ### 技术
@@ -1441,7 +1446,7 @@ pnpm dev             # http://localhost:5173，/api 代理到 3000
 
 ## 25. 一句话给实现 Claude
 
-> 先读 `REFACTOR_PLAN.md` 和现有代码。删除所有 AI/图表/报告/快照/PDF 功能；保留 Worker 解析、分片、虚拟滚动、IndexedDB 缓存；用 Express + MySQL（`mysql2` 参数化 SQL，不用 ORM）实现真实后端；按 Phase 0 → 3 逐步交付一个可登录、可上传、可分享、可评论、可实时协同编辑、owner 可保留版本的云端表格协作平台。每个阶段结束运行 `pnpm type-check`，不要提交 `.env`、数据库和 `storage` 文件。
+> 先读 `REFACTOR_PLAN.md` 和现有代码。删除所有 AI/图表/报告/快照功能；保留 Worker 解析、分片、虚拟滚动、IndexedDB 缓存、版本导出 Excel/PDF；用 Express + MySQL（`mysql2` 参数化 SQL，不用 ORM）实现真实后端；按 Phase 0 → 3 逐步交付一个可登录、可上传、可分享、可评论、可实时协同编辑、owner 可保留版本并可导出的云端表格协作平台。每个阶段结束运行 `pnpm type-check`，不要提交 `.env`、数据库和 `storage` 文件。
 
 ## 26. 协作与验收约定（用户要求，最高优先级）
 
@@ -1653,18 +1658,18 @@ POST /api/shares/:token/join   （需要登录）
 - 登录/注册页保留 `redirect=/s/:token`。
 - join 成功后跳转 `/files/:fileId`。
 
-## 29. 方向修正：取消快照/PDF，新增保留版本（2026-10-25）
+## 29. 方向修正：取消报告/快照，新增保留版本与版本导出（2026-10-25）
 
-本节取代此前所有报告、快照、PDF 相关设计（6.4 旧内容、9.6、12 的 ReportEditorView、17、Phase 3 旧条目）。
+本节取代此前所有报告、快照相关设计（6.4 旧内容、9.6、12 的 ReportEditorView、17、Phase 3 旧条目）。
 
 ### 29.1 取消的功能
 
 - 不做报告列表、报告 CRUD、TipTap 报告编辑器、服务端报告保存。
 - 不做表格快照预览。
-- 不做 PDF 导出。
 - 不做 `tableSnapshot` 自定义节点和 NodeView。
 - `reports` 表暂不使用，后续可删除。
-- Phase 3 改为清理与收尾；删除 `ReportEditor.vue` 及 TipTap/html2canvas/jsPDF 等不再使用的依赖。
+- 保留直接版本导出 Excel/PDF；保留 xlsx/html2canvas/jsPDF 依赖。
+- Phase 3 删除 `ReportEditor.vue` 和 TipTap 依赖，保留导出依赖。
 
 ### 29.2 新版本工作流
 
@@ -1696,4 +1701,25 @@ POST /api/shares/:token/join   （需要登录）
 3. 保留成功后源版本草稿清空并恢复为基础数据，但仍可继续编辑；新版本基础数据包含源版本 + 草稿。
 4. 未保留的修改继续作为草稿。
 5. 保留期间新的编辑被拒绝；成功后在线成员自动切到新版本。
-6. 无报告/快照/PDF 入口、API 和依赖。
+6. 无报告/快照入口、API 和依赖；版本导出 Excel/PDF 正常。
+
+## 30. 版本导出（2026-10-25）
+
+- 导出当前选中的 ready 版本，包含 `cell_edits` 草稿值。
+- 按原始行顺序导出，不应用当前搜索/排序。
+- Excel：完整版本，使用 `xlsx`。
+- PDF：导出全部行，使用 `html2canvas` + `jsPDF`，竖向 A4、多页，保证中文正常。
+- 所有能查看该版本的成员都可以导出。
+- 有草稿时，导出前先处理版本：
+  - 无草稿：直接打开导出弹窗。
+  - owner 有草稿：弹窗选择“保留版本并导出”或“清除改动并取消导出”；关闭弹窗不操作。
+  - 选择保留：先保留版本，成功后打开导出弹窗，导出新版本。
+  - 选择清除：执行清除改动，关闭导出流程，不生成文件。
+  - 非 owner 有草稿：提示等待 owner 处理，不导出。
+- 相关文件：
+  - `src/utils/versionExport.ts`
+  - `src/components/ExportDialog.vue`
+  - `src/components/PendingVersionDialog.vue`
+  - `src/views/FileView.vue`
+- 不做报告、快照或服务端导出，不修改版本数据。
+- Phase 3 清理时保留 xlsx/html2canvas/jsPDF，删除报告和 TipTap 遗留。
