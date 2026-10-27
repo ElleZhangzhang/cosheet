@@ -64,11 +64,6 @@ interface CreateFileInput {
 }
 //#endregion
 
-interface CreateVersionInput {
-  columns: FileColumnInput[];
-  rowCount: number;
-}
-
 interface ChunkInput {
   rows: Record<string, unknown>[];
 }
@@ -272,25 +267,6 @@ export function validateCreateFileInput(body: unknown): CreateFileInput {
   };
 }
 
-// 初步校验创建新版本时的请求体
-export function validateCreateVersionInput(
-  body: unknown
-): CreateVersionInput {
-  const data = asObject(body);
-
-  if (!Array.isArray(data.columns) || data.columns.length === 0) {
-    throw new HttpError(400, "columns 不能为空");
-  }
-
-  const columns = data.columns.map((column, index) =>
-    validateColumnInput(column, index)
-  );
-
-  return {
-    columns,
-    rowCount: validateRowCount(data.rowCount),
-  };
-}
 //#endregion
 
 //#region 4.version相关校验
@@ -558,7 +534,6 @@ export function validateCellEditInput(body: unknown): CellEditInput {
 export type {
   FileColumnInput,
   CreateFileInput,
-  CreateVersionInput,
   ChunkInput,
   CompleteInput,
   SortDir,

@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ApiError } from "@/api/http";
 import { useFileParser } from "@/composables/useFileParse";
-import { createFile, createFileVersion } from "@/services/files";
+import { createFile } from "@/services/files";
 import {
   cancelVersion,
   completeVersion,
@@ -47,7 +47,6 @@ const props = defineProps<{
   open: boolean;
   workspaceId: string;
   resumeTask?: UploadTaskMeta | null;
-  targetFileId?: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -73,10 +72,6 @@ const fatalError = ref(false);
 const cancelRequested = ref(false);
 
 const busy = computed(() => phase.value !== "idle");
-
-const dialogTitle = computed(() =>
-  props.targetFileId ? "上传新版本" : "上传文件"
-);
 
 // 如果在上传中要unload，那么阻止默认行为
 function handleBeforeUnload(event: BeforeUnloadEvent): void {
@@ -566,27 +561,14 @@ async function startUpload(): Promise<void> {
   phase.value = "creating";
 
   try {
-    let fileId: string;
-    let createdVersion: { id: string; chunkCount: number };
+    const created = await createFile(props.workspaceId, {
+      name: parsed.name,
+      columns: parsed.columns,
+      rowCount: parsed.rowCount,
+    });
 
-    if (props.targetFileId) {
-      const created = await createFileVersion(props.targetFileId, {
-        columns: parsed.columns,
-        rowCount: parsed.rowCount,
-      });
-
-      fileId = props.targetFileId;
-      createdVersion = created.version;
-    } else {
-      const created = await createFile(props.workspaceId, {
-        name: parsed.name,
-        columns: parsed.columns,
-        rowCount: parsed.rowCount,
-      });
-
-      fileId = created.file.id;
-      createdVersion = created.version;
-    }
+    const fileId = created.file.id;
+    const createdVersion = created.version;
 
     versionId.value = createdVersion.id;
     totalChunks.value = createdVersion.chunkCount;
@@ -696,7 +678,7 @@ watch(
     <div v-if="open" class="dialog-overlay" @click.self="closeDialog">
       <div class="dialog-card">
         <header class="dialog-header">
-          <h2>{{ dialogTitle }}</h2>
+          <h2>上传文件</h2>
           <button
             type="button"
             class="close-btn"
